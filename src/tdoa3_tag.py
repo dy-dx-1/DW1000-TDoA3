@@ -3,7 +3,7 @@ from .dw1000 import DW1000
 
 class TDOA3_Tag: 
     """
-    A DW1000 based UWB Tag that works with the Bitcraze anchors following their TDoA3 protocol. 
+    A DW1000 based UWB Tag that works with Bitcraze anchors following their TDoA3 protocol. 
     Only use with a context manager for safety. 
 
     ARGS: 
@@ -15,6 +15,11 @@ class TDOA3_Tag:
         self.id = id 
         self._dw = DW1000(bus, cs, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
 
+        # The tag dynamically discovers anchors and their positions to avoid needing to rely on a config file 
+        # for this to work, anchors must have their position configured in their firmware. 
+        # NOTE TODO: add a manual overwrite possibility with a config file? would allow more flexibility when deploying while keeping this functionality
+        self.seen_anchors = set() 
+        self.anchor_positions = {} 
     def __enter__(self):
         return self 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -28,8 +33,8 @@ class TDOA3_Tag:
         RETURNS: 
         - anchor_id: ID of the anchor that sent the message
         - seq:       SEQ of the transaction 
-        - tx_ts:     Transmit timestamp of the message  # TODO fix units 
-        - remote_anchors: dict of shape {remoteAnchorIds: (seq, rx_ts, r_dist)} distances in ticks 
+        - tx_ts:     Transmit timestamp of the message in 32-bit based DW1000 ticks
+        - remote_anchors: dict of shape {remoteAnchorIds: (seq, rx_ts, r_dist)} rx (32-bit based) and distances (16bit) in ticks 
         - anchor_pos: (x,y,z) position of the anchor or None 
 
         INFO: 
@@ -43,7 +48,6 @@ class TDOA3_Tag:
         """
         BC_TDOA3_DEST_HEADER = [0x41, 0xdc, 0x0,  0x0, 0x0, 0xff, 0x0, 0x0, 0x0, 0x0, 0x0, 0xcf, 0xbc] 
         # Checking if the message has the expected header (BC format and general broadcast to 0xFF + TDOA3 header 0x30) 
-        print([hex(i) for i in msg[21:]])
         if msg[:13] != BC_TDOA3_DEST_HEADER and msg[21] != 0x30: 
             return 
         ## Extracting important info from message 
@@ -52,7 +56,7 @@ class TDOA3_Tag:
         # SEQ 
         seq = msg[22] 
         # TX Timestamp
-        tx_ts = msg[23:27]
+        tx_ts = int.from_bytes(bytes(msg[23:27]), 'little') 
         # remoteCount 
         n_other_anchors = msg[27]
         # Processing remote anchors data if they are present
@@ -64,7 +68,7 @@ class TDOA3_Tag:
                 r_id = msg[id_idx]
                 has_dist = msg[id_idx+1]>>7
                 r_seq    = msg[id_idx+1]&0x7F
-                rx_ts    = msg[id_idx+2:id_idx+6]
+                rx_ts    = int.from_bytes(bytes(msg[id_idx+2:id_idx+6]), 'little') 
                 r_dist   = int.from_bytes(bytes(msg[id_idx+6:id_idx+8]), 'little') if has_dist else None # NOTE dist is in radio ticks
 
                 remote_anchors[r_id] = (r_seq, rx_ts, r_dist)
@@ -73,6 +77,6 @@ class TDOA3_Tag:
         anchor_pos_packet = msg[-14:] 
         anchor_pos = None 
         if anchor_pos_packet[0:2] == [0xF0, 0x01]: # Expected header for a LPP short packet with anchor position 
-            anchor_pos = struct.unpack('fff', bytes(anchor_pos_packet[2:]))
+            anchor_pos = struct.unpack('<fff', bytes(anchor_pos_packet[2:]))
 
         return anchor_id, seq, tx_ts, remote_anchors, anchor_pos  
