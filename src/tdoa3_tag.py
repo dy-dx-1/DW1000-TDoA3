@@ -23,13 +23,45 @@ class TDOA3_Tag:
         # The tag dynamically discovers anchors and their positions to avoid needing to rely on a config file 
         # for this to work, anchors must have their position configured in their firmware. 
         # NOTE TODO: add a manual overwrite possibility with a config file? would allow more flexibility when deploying while keeping this functionality
-        self.seen_anchors = set() 
         self.anchor_positions = {} 
         
     def __enter__(self):
         return self 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._dw.close() 
+
+    def run(self, enable_print:bool): 
+        """
+        Starts an infinite loop that runs continuous localization of the tag. 
+        TODO Add CSV buffering+saving? Future ROS publishing? 
+        """
+        while True: 
+            # Computing TDOA parameters requires 2 subsequent measurements 
+            # Therefore we iterate 2 different behaviors: initial listen -> 'analysis' (trying to construct parameters) 
+            # Only if we catch enough subsequent listens to build sufficient TDOA pairs can we localize 
+            # The high frequency of transmissions makes it so this strict policy still enables localization 
+            iter_type = 0 
+            pkt, rx = self._dw.listen(ranging=True, timeout=5) # We should always be near anchors so the timeout should never be reached unless we move out of range. 
+            if not pkt: # rx is None if and only if pkt is None per DW1000 class methods. 
+                continue   
+            anchor_id, seq, tx_ts, remote_anchors, anchor_pos = self.interpret_anchor_msg(pkt) 
+            # Adding anchor_pos to our references if it doesn't exist 
+            if anchor_id not in self.anchor_positions: 
+                self.anchor_positions[anchor_id] = (anchor_pos[0], anchor_pos[1], anchor_pos[2])
+            # If this is an 'initial listen' iter, store what we heard 
+            if not iter_type: 
+                pass
+            # Else, we are at an 'analysis' iter, try to build TDOA info  
+            else: 
+                # TODO extract delta TX from tx_ts and remote_anchors data 
+                # TODO extract alpha with seq and remote_anchors data 
+                # on every 2nd transmission, compute tdoa for each pair 
+                # compute it in array manner for efficiency ? 
+                position = self.multilaterate([])
+                if enable_print: 
+                    print(f"[INFO] New position estimated: {position}")
+            # Switch iter type for next round 
+            iter_type = 1 - iter_type 
 
     @staticmethod
     def interpret_anchor_msg(msg:list[int])->tuple[int, int, int, dict, tuple|None]:

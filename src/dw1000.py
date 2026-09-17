@@ -315,7 +315,7 @@ class DW1000:
             # If we didn't get anything, DW1000 stays in RX mode 
             return False 
 
-    def receive_packet(self, return_ints:bool=True)->tuple[list, int]: 
+    def receive_packet(self, return_ints:bool=True)->tuple[list|None, int|None]: 
         """ 
         Reads the RX buffer. This should only be called if the packet_available() method returns True. 
 
@@ -342,7 +342,7 @@ class DW1000:
         data = self.read_register([0x11], rxfle_rxflen, return_ints=return_ints)  
         return data, rx_stamp
 
-    def listen(self, ranging:bool=False, timeout:float=DW_LISTEN_TIMEOUT, return_ints:bool=True)->None|list|tuple[list, int|None]: 
+    def listen(self, ranging:bool=False, timeout:float=DW_LISTEN_TIMEOUT, return_ints:bool=True)->None|list|tuple[list|None, int|None]: 
         """
         Sets the DW1000 to RX mode and listens for messages. 
         Returns the first message found, if any, and closes the connection. 
