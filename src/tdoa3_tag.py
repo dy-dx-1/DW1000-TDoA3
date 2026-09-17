@@ -2,6 +2,7 @@ import struct
 from .dw1000 import DW1000
 import scipy
 import numpy as np
+import time 
 
 from .config import ANCHORS 
 
@@ -20,7 +21,7 @@ class TDOA3_Tag:
     def __init__(self, id, bus=0, cs=0): 
         self._dw = DW1000(bus, cs, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
         self.id = id 
-        
+
         # Anchor positions can be pre-defined in config.py to overwrite firmware values. 
         # If a position is not pre-defined, it will be populated with the firmware-defined values published by the anchor in it's messages.
         self.anchors = ANCHORS # {anchor_id: (x,y,z)}
@@ -43,6 +44,31 @@ class TDOA3_Tag:
         Starts an infinite loop that runs continuous localization of the tag. 
         TODO Add CSV buffering+saving? Future ROS publishing? 
         """
+        while True: 
+            # Gathering anchor data 
+            t1 = time.perfcounter() 
+            while (time.perf_counter()-t1)<1: # TODO formalize update frequency in config 
+                pkt, rx = self._dw.listen(ranging=True) 
+                if pkt: # rx is None if and only if pkt is None per DW1000 class methods.
+                    # TODO Add to custom DS 
+                    # operations here should be kept to a minimum so we gather as much data as possible  
+                    aggregate_data() 
+            # Processing it to generate a localization update 
+            # should run interpret_anchor_msg here to keep processing out of info loop 
+            anchor_id, seq, tx_ts, remote_anchors, anchor_pos = self.interpret_anchor_msg(pkt) 
+            # Adding anchor_pos to our references if it doesn't exist 
+            if anchor_id not in self.anchors: 
+                self.anchors[anchor_id] = (anchor_pos[0], anchor_pos[1], anchor_pos[2])
+            # Calculating position 
+            # use some kind of array manipulation to compute all the tdoas efficiently? 
+            position = self.multilaterate([])
+            if enable_print: 
+                print(f"[INFO] New position estimated: {position}")
+
+
+    def old_run(self, enable_print:bool): 
+        """
+        Initial version of run before I moved to gathering->process loop. Here temporarily in just in case."""
         # Computing TDOA parameters requires 2 subsequent measurements 
         # Therefore we iterate 2 different behaviors: initial listen -> 'analysis' (trying to construct parameters) 
         # Only if we catch enough subsequent listens to build sufficient TDOA pairs can we localize 
