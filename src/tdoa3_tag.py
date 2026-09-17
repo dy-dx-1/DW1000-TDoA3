@@ -1,5 +1,9 @@
 import struct 
 from .dw1000 import DW1000
+import scipy
+import numpy as np
+
+SPEED_OF_LIGHT = 299_702_547 # m/s 
 
 class TDOA3_Tag: 
     """
@@ -14,12 +18,14 @@ class TDOA3_Tag:
     def __init__(self, id, bus=0, cs=0): 
         self.id = id 
         self._dw = DW1000(bus, cs, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
+        self.position = (0,0,0) # TODO better initialization of position? Centroid of known anchors?  
 
         # The tag dynamically discovers anchors and their positions to avoid needing to rely on a config file 
         # for this to work, anchors must have their position configured in their firmware. 
         # NOTE TODO: add a manual overwrite possibility with a config file? would allow more flexibility when deploying while keeping this functionality
         self.seen_anchors = set() 
         self.anchor_positions = {} 
+        
     def __enter__(self):
         return self 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -80,3 +86,37 @@ class TDOA3_Tag:
             anchor_pos = struct.unpack('<fff', bytes(anchor_pos_packet[2:]))
 
         return anchor_id, seq, tx_ts, remote_anchors, anchor_pos  
+
+    def multilaterate(self, tdoa_data:list[tuple])->tuple[int,int,int]:
+        """
+        Use TDoA multilateration to estimate the tag's position. Automatically updates the "position" attribute.\n
+        Returns the estimated position as (x,y,z) coordinates\n 
+        ARGS: 
+        - tdoa_data: A list of tuples representing independent measurements (minimum 4) 
+            - tuple format: (TDOA_measure_seconds, anchor_pos_tuple_1, anchor_pos_tuple_2)
+
+        INFO:\n
+        Position is estimated through non-linear least squares.
+        The residual function is defined as (TDOA corresponding to the current estimated position - measured TDOA by the tag) \n
+        The TDOA values given should always be with respect to (tag->a1 - tag->a2) 
+        """
+        if len(tdoa_data)<4:
+            print("[ERROR] multilaterate() was called with less than 4 measurements, cannot converge.")
+            return None 
+        def tdoa_residuals(current_pos_estimate:np.ndarray, tdoa_data): 
+            # Residual function: (TDOA corresponding to an estimate - measured TDOA) 
+            # IMPORTANT: TDOAs are assumed to be with respect to anchor 1 - anchor 2. 
+            residuals = [] 
+            for tdoa, a1_pos, a2_pos in tdoa_data: 
+                estimated_delta = np.linalg.norm(current_pos_estimate - a1_pos) - np.linalg.norm(current_pos_estimate - a2_pos)
+                measured_delta  = tdoa*SPEED_OF_LIGHT # result in meters 
+                residuals.append(estimated_delta-measured_delta)
+            return np.array(residuals) 
+        # Non-linear least squares, using last known position as initial guess 
+        result = scipy.optimize.least_squares(tdoa_residuals, np.array(self.position), args=(tdoa_data,), method='lm') 
+        if result.success: 
+            self.position = tuple(result.x[0], result.x[1], result.x[2]) 
+            return self.position 
+        else: 
+            print(f"[ERROR] Least squares failed to converge {result.message}")
+            return None 
