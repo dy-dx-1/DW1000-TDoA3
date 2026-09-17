@@ -18,13 +18,20 @@ class TDOA3_Tag:
     - cs:  SPI chip select for the DW1000 connection
     """
     def __init__(self, id, bus=0, cs=0): 
-        self.id = id 
         self._dw = DW1000(bus, cs, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
-        self.position = (0,0,0) # TODO better initialization of position? Centroid of known anchors?  
-
+        self.id = id 
+        
         # Anchor positions can be pre-defined in config.py to overwrite firmware values. 
         # If a position is not pre-defined, it will be populated with the firmware-defined values published by the anchor in it's messages.
         self.anchors = ANCHORS # {anchor_id: (x,y,z)}
+
+        # Guessing an initial position. Will serve as starting point for subsequent optimization in .run() 
+        if len(self.anchors)>=1: 
+            anchor_pos = np.array( [pos_tuple for pos_tuple in self.anchors.values()] )
+            initial_pos = np.mean(anchor_pos, axis=0) # Geometric centroid of the anchors 
+            self.position = (initial_pos[0], initial_pos[1], initial_pos[2])
+        else: 
+            self.position = (0,0,0) # If we don't have any info, try (0,0,0). NOTE todo in future: evaluate how this actually performs. If needed, shift this to on first listen when can use firmware positions of anchors to help. 
         
     def __enter__(self):
         return self 
