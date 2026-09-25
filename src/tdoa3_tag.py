@@ -1,6 +1,6 @@
 import struct 
 from .dw1000 import DW1000
-import scipy
+import scipy.optimize 
 import numpy as np
 import time 
 
@@ -24,7 +24,7 @@ class TDOA3_Tag:
 
         # Anchor positions can be pre-defined in config.py to overwrite firmware values. 
         # If a position is not pre-defined, it will be populated with the firmware-defined values published by the anchor in it's messages.
-        self.anchors = ANCHORS # {anchor_id: (x,y,z)}
+        self.anchors = dict(ANCHORS) # Copy of the config dict. Format {anchor_id: (x,y,z)}
 
         # Guessing an initial position. Will serve as starting point for subsequent optimization in .run() 
         if len(self.anchors)>=1: 
@@ -47,7 +47,7 @@ class TDOA3_Tag:
         while True: 
             # Gathering anchor data 
             raw_data = [] 
-            t1 = time.perfcounter() 
+            t1 = time.perf_counter() 
             while (time.perf_counter()-t1)<1: # TODO formalize update frequency in config 
                 pkt, rx = self._dw.listen(ranging=True) 
                 if pkt: # rx is None if and only if pkt is None per DW1000 class methods.
@@ -70,7 +70,7 @@ class TDOA3_Tag:
         Takes a list of received raw packets and compiles the data-per anchor in a dict. 
         
         ARGS:
-        - data: List of tuples [(local_rx_time, raw_packet)] 
+        - data: List of tuples [(raw_packet, local_rx_time)] 
         
         RETURNS:
         - Dict of shape {anchor_id: [{rx_t-1, tx_t-1, remote_data_t-1}, {rx, tx, remote_data}]}
@@ -78,9 +78,16 @@ class TDOA3_Tag:
         """
         parsed_data = {} 
         for pkt, rx in data: 
-            anchor_id, seq, tx_ts, remote_anchors, anchor_pos = self.interpret_anchor_msg(pkt) 
+            interpreted_msg = self.interpret_anchor_msg(pkt) 
+            if self.interpret_anchor_msg is None: 
+                continue 
+            anchor_id, seq, tx_ts, remote_anchors, anchor_pos = interpreted_msg
             # Adding anchor_pos to our references if it doesn't exist 
             if anchor_id not in self.anchors: 
+                if anchor_pos is None: 
+                    print(f"[ERROR] ANCHOR {anchor_id} DOES NOT HAVE A POSITION CONFIGURED IN THE FIRMWARE OR config.py.")
+                    print("IT WILL BE IGNORED FOR ALL COMPUTATIONS. Add it's position through firmware or config.py to enable it.")
+                    continue 
                 self.anchors[anchor_id] = (anchor_pos[0], anchor_pos[1], anchor_pos[2])
             # Adding to dict
             msg_data = {'seq':seq, 'rx': rx, 'tx': tx_ts, 'remote_data':remote_anchors}
@@ -128,21 +135,34 @@ class TDOA3_Tag:
             if  current_remote_size > best_remote_size:
                 best_remote_size = current_remote_size
                 ref_anchor = anchor_id 
-        if not ref_anchor: 
+        if ref_anchor is None: 
             return results 
         # Computing alpha for this reference anchor
         delta_tx_prime = aggregated_data[ref_anchor][1]['tx'] - aggregated_data[ref_anchor][0]['tx']
         delta_rx_prime = aggregated_data[ref_anchor][1]['rx'] - aggregated_data[ref_anchor][0]['rx']
-        alpha = delta_rx_prime/delta_tx_prime # Conversion factor from ref_anchor clock ticks -> tag clock ticks 
+        try: 
+            alpha = delta_rx_prime/delta_tx_prime # Conversion factor from ref_anchor clock ticks -> tag clock ticks 
+        except ZeroDivisionError:
+            return results # This shouldn't happen but just in case 
         # Going over all possible ref_anchor -> other anchor pairings and computing TDOA 
         for remote_anchor, (r_seq, r_rx, r_tof) in aggregated_data[ref_anchor][1]['remote_data'].items(): 
+            if (remote_anchor not in aggregated_data) or (r_tof is None): 
+                # Ignore the data for this anchor if we didn't hear from it or we don't have TOF info to it 
+                continue 
+            # Checking if one of the msgs we caught from the remote anchor matches the SEQ from reference-remote anchor transaction
+            # These MUST match for delta RX to make physical sense. Else, ignore. 
+            if (aggregated_data[remote_anchor][1]['seq']==r_seq): 
+                tag_data_from_remote_anchor = aggregated_data[remote_anchor][1] 
+            elif (aggregated_data[remote_anchor][0]['seq']==r_seq): 
+                tag_data_from_remote_anchor = aggregated_data[remote_anchor][0] 
+            else: 
+                continue
             # Outlier check by comparing measured TOF with geometric TOF since we know all anchor positions 
             # NOTE TODO add outlier check with TOF 
             # Computing delta TX in the reference anchor's clock: ref TX info - (ref RX info of the other tag - TOF both tags)
             delta_tx = aggregated_data[ref_anchor][1]['tx'] - (r_rx - r_tof) 
             # Computing delta RX in the tag's clock 
-            # NOTE TODO add a check that the r_seq is not too far from remote_anchor SEQ? To ensure data is not stale
-            delta_rx = aggregated_data[ref_anchor][1]['rx'] - aggregated_data[remote_anchor][1]['rx'] 
+            delta_rx = aggregated_data[ref_anchor][1]['rx'] - tag_data_from_remote_anchor['rx'] 
             # Computing TDOA and storing 
             TDoA = (delta_rx - (alpha*delta_tx))*DW1000.TIME_UNIT # ticks->seconds 
             results.append( (TDoA, self.anchors[ref_anchor], self.anchors[remote_anchor]) )
@@ -157,7 +177,7 @@ class TDOA3_Tag:
         - anchor_id: ID of the anchor that sent the message
         - seq:       SEQ of the transaction 
         - tx_ts:     Transmit timestamp of the message in 32-bit based DW1000 ticks
-        - remote_anchors: dict of shape {remoteAnchorIds: (seq, rx_ts, r_dist)} rx (32-bit based) and distances (16bit) in ticks 
+        - remote_anchors: dict of shape {remoteAnchorIds: (seq, rx_ts, r_tof)} rx (32-bit based) and tof (16bit) in ticks 
         - anchor_pos: (x,y,z) position of the anchor or None 
 
         INFO: 
@@ -171,7 +191,7 @@ class TDOA3_Tag:
         """
         BC_TDOA3_DEST_HEADER = [0x41, 0xdc, 0x0,  0x0, 0x0, 0xff, 0x0, 0x0, 0x0, 0x0, 0x0, 0xcf, 0xbc] 
         # Checking if the message has the expected header (BC format and general broadcast to 0xFF + TDOA3 header 0x30) 
-        if msg[:13] != BC_TDOA3_DEST_HEADER and msg[21] != 0x30: 
+        if msg[:13] != BC_TDOA3_DEST_HEADER or msg[21] != 0x30: 
             return 
         ## Extracting important info from message 
         # Source anchor ID 
@@ -183,7 +203,7 @@ class TDOA3_Tag:
         # remoteCount 
         n_other_anchors = msg[27]
         # Processing remote anchors data if they are present
-        remote_anchors = {} # {id: (seq, rx_ts, r_dist)}
+        remote_anchors = {} # {id: (seq, rx_ts, r_tof)}
         if n_other_anchors!=0: 
             start_idx = 28 
             for _ in range(n_other_anchors): 
@@ -192,9 +212,9 @@ class TDOA3_Tag:
                 has_dist = msg[id_idx+1]>>7
                 r_seq    = msg[id_idx+1]&0x7F
                 rx_ts    = int.from_bytes(bytes(msg[id_idx+2:id_idx+6]), 'little') 
-                r_dist   = int.from_bytes(bytes(msg[id_idx+6:id_idx+8]), 'little') if has_dist else None # NOTE dist is in radio ticks
+                r_tof   = int.from_bytes(bytes(msg[id_idx+6:id_idx+8]), 'little') if has_dist else None # NOTE tof is in radio ticks
 
-                remote_anchors[r_id] = (r_seq, rx_ts, r_dist)
+                remote_anchors[r_id] = (r_seq, rx_ts, r_tof)
                 start_idx += 6 + (2 if has_dist else 0) # next anchor index will depend on if this info had a distance
         # Source anchor position if available. Since it's position depends on remoteAnchors, we index from the end 
         anchor_pos_packet = msg[-14:] 
@@ -209,7 +229,7 @@ class TDOA3_Tag:
         Use TDoA multilateration to estimate the tag's position. Automatically updates the "position" attribute.\n
         Returns the estimated position as (x,y,z) coordinates\n 
         ARGS: 
-        - tdoa_data: A list of tuples representing independent measurements (minimum 4) 
+        - tdoa_data: A list of tuples representing independent measurements (minimum 3) 
             - tuple format: (TDOA_measure_seconds, anchor_pos_tuple_1, anchor_pos_tuple_2)
 
         INFO:\n
@@ -217,8 +237,8 @@ class TDOA3_Tag:
         The residual function is defined as (TDOA corresponding to the current estimated position - measured TDOA by the tag) \n
         The TDOA values given should always be with respect to (tag->a1 - tag->a2) 
         """
-        if len(tdoa_data)<4:
-            print("[INFO] multilaterate() was called with less than 4 measurements, cannot converge.")
+        if len(tdoa_data)<3:
+            print("[INFO] multilaterate() was called with less than 3 measurements, cannot converge.")
             return None 
         def tdoa_residuals(current_pos_estimate:np.ndarray, tdoa_data): 
             # Residual function: (TDOA corresponding to an estimate - measured TDOA) 
@@ -232,7 +252,7 @@ class TDOA3_Tag:
         # Non-linear least squares, using last known position as initial guess 
         result = scipy.optimize.least_squares(tdoa_residuals, np.array(self.position), args=(tdoa_data,), method='lm') 
         if result.success: 
-            self.position = tuple(result.x[0], result.x[1], result.x[2]) 
+            self.position = tuple(result.x) 
             return self.position 
         else: 
             print(f"[ERROR] Least squares failed to converge {result.message}")
