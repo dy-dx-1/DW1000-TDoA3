@@ -61,7 +61,7 @@ class TDOA3_Tag:
             tdoa_anchor_data = self.process_anchor_data(aggregated_data)                
             # Calculating position 
             # use some kind of array manipulation to compute all the tdoas efficiently? 
-            position = self.multilaterate([])
+            position = self.multilaterate(tdoa_anchor_data)
             if enable_print: 
                 print(f"[INFO] New position estimated: {position}")
     
@@ -103,8 +103,50 @@ class TDOA3_Tag:
                     parsed_data[anchor_id] = [msg_data] 
         return parsed_data
 
+    def process_anchor_data(self, aggregated_data):
+        """
+        Takes an aggregated dict of per-anchor data and computes TDOA with anchor pairs with respect to a reference anchor. 
+        The reference anchor is chosen as the one with most info about the others. 
 
-        
+        ARGS: 
+        - Dict of aggregated data: {anchor_id: [{rx, tx, remote_data}, {rx, tx, remote_data}]}
+            - At least one of the anchors must have data for 2 transactions to be able to compute TDOA with respect to it
+            - If multiple anchors have 2 transaction data, the one with the most remote_data is used as reference 
+            - Item 0 of the list is the oldest data 
+
+        RETURNS:
+        - List of shape [(TDOA, a1_pos, a2_pos), ...] 
+        """
+        results = [] 
+        # Selecting reference anchor as the one with the largest remote_data that also has 2 subsequent transactions
+        ref_anchor = None 
+        best_remote_size = 0 
+        for anchor_id, data_pair in aggregated_data.items(): 
+            if len(data_pair)<2: 
+                continue 
+            current_remote_size = min(len(data_pair[0]['remote_data']), len(data_pair[1]['remote_data']))
+            if  current_remote_size > best_remote_size:
+                best_remote_size = current_remote_size
+                ref_anchor = anchor_id 
+        if not ref_anchor: 
+            return results 
+        # Computing alpha for this reference anchor
+        delta_tx_prime = aggregated_data[ref_anchor][1]['tx'] - aggregated_data[ref_anchor][0]['tx']
+        delta_rx_prime = aggregated_data[ref_anchor][1]['rx'] - aggregated_data[ref_anchor][0]['rx']
+        alpha = delta_rx_prime/delta_tx_prime # Conversion factor from ref_anchor clock ticks -> tag clock ticks 
+        # Going over all possible ref_anchor -> other anchor pairings and computing TDOA 
+        for remote_anchor, (r_seq, r_rx, r_tof) in aggregated_data[ref_anchor][1]['remote_data'].items(): 
+            # Outlier check by comparing measured TOF with geometric TOF since we know all anchor positions 
+            # NOTE TODO add outlier check with TOF 
+            # Computing delta TX in the reference anchor's clock: ref TX info - (ref RX info of the other tag - TOF both tags)
+            delta_tx = aggregated_data[ref_anchor][1]['tx'] - (r_rx - r_tof) 
+            # Computing delta RX in the tag's clock 
+            # NOTE TODO add a check that the r_seq is not too far from remote_anchor SEQ? To ensure data is not stale
+            delta_rx = aggregated_data[ref_anchor][1]['rx'] - aggregated_data[remote_anchor][1]['rx'] 
+            # Computing TDOA and storing 
+            TDoA = (delta_rx - (alpha*delta_tx))*DW1000.TIME_UNIT # ticks->seconds 
+            results.append( (TDoA, self.anchors[ref_anchor], self.anchors[remote_anchor]) )
+        return results 
 
     @staticmethod
     def interpret_anchor_msg(msg:list[int])->tuple[int, int, int, dict, tuple|None]:
@@ -176,7 +218,7 @@ class TDOA3_Tag:
         The TDOA values given should always be with respect to (tag->a1 - tag->a2) 
         """
         if len(tdoa_data)<4:
-            print("[ERROR] multilaterate() was called with less than 4 measurements, cannot converge.")
+            print("[INFO] multilaterate() was called with less than 4 measurements, cannot converge.")
             return None 
         def tdoa_residuals(current_pos_estimate:np.ndarray, tdoa_data): 
             # Residual function: (TDOA corresponding to an estimate - measured TDOA) 
