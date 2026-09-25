@@ -46,56 +46,65 @@ class TDOA3_Tag:
         """
         while True: 
             # Gathering anchor data 
+            raw_data = [] 
             t1 = time.perfcounter() 
             while (time.perf_counter()-t1)<1: # TODO formalize update frequency in config 
                 pkt, rx = self._dw.listen(ranging=True) 
                 if pkt: # rx is None if and only if pkt is None per DW1000 class methods.
-                    # TODO Add to custom DS 
-                    # operations here should be kept to a minimum so we gather as much data as possible  
-                    aggregate_data() 
-            # Processing it to generate a localization update 
-            # should run interpret_anchor_msg here to keep processing out of info loop 
-            anchor_id, seq, tx_ts, remote_anchors, anchor_pos = self.interpret_anchor_msg(pkt) 
-            # Adding anchor_pos to our references if it doesn't exist 
-            if anchor_id not in self.anchors: 
-                self.anchors[anchor_id] = (anchor_pos[0], anchor_pos[1], anchor_pos[2])
+                    # We don't process the pkts yet to ensure we get as much info as possible 
+                    raw_data.append((pkt, rx))
+            # Now that out of gathering info loop, parsing & organizing the data 
+            # Using a dict {anchor_id: [{rx_t-1, tx_t-1, remote_data_t-1}, {rx, tx, remote_data}]}
+            # Only keep the latest 2 messages for any anchor (need fresh data for calculations)
+            aggregated_data = self.aggregate_raw_pkts(raw_data) 
+            # Processing the data into TDOA-anchor pairs 
+            tdoa_anchor_data = self.process_anchor_data(aggregated_data)                
             # Calculating position 
             # use some kind of array manipulation to compute all the tdoas efficiently? 
             position = self.multilaterate([])
             if enable_print: 
                 print(f"[INFO] New position estimated: {position}")
-
-
-    def old_run(self, enable_print:bool): 
+    
+    def aggregate_raw_pkts(self, data:list[tuple[int, int]])->dict[int, list[dict]]: 
         """
-        Initial version of run before I moved to gathering->process loop. Here temporarily in just in case."""
-        # Computing TDOA parameters requires 2 subsequent measurements 
-        # Therefore we iterate 2 different behaviors: initial listen -> 'analysis' (trying to construct parameters) 
-        # Only if we catch enough subsequent listens to build sufficient TDOA pairs can we localize 
-        # The high frequency of transmissions makes it so this strict policy still enables localization 
-        iter_type = 0 
-        while True: 
-            pkt, rx = self._dw.listen(ranging=True, timeout=5) # We should always be near anchors so the timeout should never be reached unless we move out of range. 
-            if not pkt: # rx is None if and only if pkt is None per DW1000 class methods. 
-                continue   
+        Takes a list of received raw packets and compiles the data-per anchor in a dict. 
+        
+        ARGS:
+        - data: List of tuples [(local_rx_time, raw_packet)] 
+        
+        RETURNS:
+        - Dict of shape {anchor_id: [{rx_t-1, tx_t-1, remote_data_t-1}, {rx, tx, remote_data}]}
+            - For each anchor, only the last 2 messages are kept to compute TDOA. If both are present, the SEQs are subsequent. 
+        """
+        parsed_data = {} 
+        for pkt, rx in data: 
             anchor_id, seq, tx_ts, remote_anchors, anchor_pos = self.interpret_anchor_msg(pkt) 
             # Adding anchor_pos to our references if it doesn't exist 
             if anchor_id not in self.anchors: 
                 self.anchors[anchor_id] = (anchor_pos[0], anchor_pos[1], anchor_pos[2])
-            # If this is an 'initial listen' iter, store what we heard 
-            if not iter_type: 
-                pass
-            # Else, we are at an 'analysis' iter, try to build TDOA info  
-            else: 
-                # TODO extract delta TX from tx_ts and remote_anchors data 
-                # TODO extract alpha with seq and remote_anchors data 
-                # on every 2nd transmission, compute tdoa for each pair 
-                # compute it in array manner for efficiency ? 
-                position = self.multilaterate([])
-                if enable_print: 
-                    print(f"[INFO] New position estimated: {position}")
-            # Switch iter type for next round 
-            iter_type = 1 - iter_type 
+            # Adding to dict
+            msg_data = {'seq':seq, 'rx': rx, 'tx': tx_ts, 'remote_data':remote_anchors}
+            number_of_msgs = len(parsed_data.get(anchor_id, [])) 
+            if number_of_msgs==0: 
+                # If we haven't added any messages, simply initialize the list with one
+                parsed_data[anchor_id] = [msg_data] 
+            elif number_of_msgs==1: 
+                # If we have 1 msg, add this one if it's the subsequent SEQ. Else, flush and keep the freshest 
+                if seq == (parsed_data[anchor_id][0]['seq'] + 1)&0xFF: # &0xFF to wrap the counter if needed
+                    parsed_data[anchor_id].append(msg_data)
+                else: 
+                    parsed_data[anchor_id] = [msg_data] 
+            elif number_of_msgs==2: 
+                # If we have 2 msgs, clear the 1st and add this one if it's subsequent SEQ. Else, flush and keep freshest. 
+                if seq == (parsed_data[anchor_id][1]['seq'] + 1)&0xFF: 
+                    parsed_data[anchor_id].pop(0) 
+                    parsed_data[anchor_id].append(msg_data)
+                else:
+                    parsed_data[anchor_id] = [msg_data] 
+        return parsed_data
+
+
+        
 
     @staticmethod
     def interpret_anchor_msg(msg:list[int])->tuple[int, int, int, dict, tuple|None]:
