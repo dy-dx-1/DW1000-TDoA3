@@ -8,6 +8,43 @@ from .config import ANCHORS
 
 SPEED_OF_LIGHT = 299_702_547 # m/s 
 
+def wrap_diff(a, b, bits:int, signed:bool=True):
+    """
+    Computes (a - b) with correct wraparound for a fixed-width hardware counter. Anchor clocks are capped at 32bit from BC firmware. Tag clock is 40bit based from DW1000 class.
+
+    ARGS:
+    - bits: width of the counter this value came from.
+        - 32 for anything read from an anchor
+        - 40 for anything read from the tag own's clock 
+    - signed: whether the true result can meaningfully be negative.
+        - False: use when a and b come from the SAME clock
+          taken in known chronological order (e.g. two
+          consecutive tx_ts values from one anchor's own broadcasts, or
+          two consecutive rx values the tag recorded for the same
+          anchor). The true delta is always >= 0 by construction, so we
+          just need it correctly wrapped -- reinterpreting as signed
+          could flip a large-but-legitimate positive delta into a
+          bogus negative one.
+        - True: use when a and b come from DIFFERENT clocks,
+          or from the same clock but with no guarantee which is larger
+          (e.g. an anchor's tx_ts vs. a remote anchor's rx-derived value;
+          or the tag's rx timestamps for two different anchors). These
+          deltas represent clock offsets / propagation differences and
+          can legitimately go either way, so the wrapped result is
+          reinterpreted as signed (values in the upper half of the
+          range become negative).
+
+    Only valid if the true (unwrapped) magnitude of a - b is less than
+    half the counter's range: 2**31 ticks (~33.55 ms) for bits=32,
+    2**39 ticks (~8.6 s) for bits=40. Both hold comfortably for the
+    quantities we compute here.
+    """
+    mask = (1 << bits) - 1
+    d = (a - b) & mask
+    if signed and d >= (1 << (bits - 1)):
+        d -= (1 << bits)
+    return d
+
 class TDOA3_Tag: 
     """
     A DW1000 based UWB Tag that works with Bitcraze anchors following their TDoA3 protocol. 
@@ -79,7 +116,7 @@ class TDOA3_Tag:
         parsed_data = {} 
         for pkt, rx in data: 
             interpreted_msg = self.interpret_anchor_msg(pkt) 
-            if self.interpret_anchor_msg is None: 
+            if interpreted_msg is None: 
                 continue 
             anchor_id, seq, tx_ts, remote_anchors, anchor_pos = interpreted_msg
             # Adding anchor_pos to our references if it doesn't exist 
@@ -93,7 +130,7 @@ class TDOA3_Tag:
             msg_data = {'seq':seq, 'rx': rx, 'tx': tx_ts, 'remote_data':remote_anchors}
             number_of_msgs = len(parsed_data.get(anchor_id, [])) 
             if number_of_msgs==0: 
-                # If we haven't added any messages, simply initialize the list with one
+                # If we haven't added any messages -> initialize the list with one
                 parsed_data[anchor_id] = [msg_data] 
             elif number_of_msgs==1: 
                 # If we have 1 msg, add this one if it's the subsequent SEQ. Else, flush and keep the freshest 
@@ -110,7 +147,7 @@ class TDOA3_Tag:
                     parsed_data[anchor_id] = [msg_data] 
         return parsed_data
 
-    def process_anchor_data(self, aggregated_data):
+    def process_anchor_data(self, aggregated_data:dict[int, list[dict, dict]]):
         """
         Takes an aggregated dict of per-anchor data and computes TDOA with anchor pairs with respect to a reference anchor. 
         The reference anchor is chosen as the one with most info about the others. 
@@ -138,8 +175,8 @@ class TDOA3_Tag:
         if ref_anchor is None: 
             return results 
         # Computing alpha for this reference anchor
-        delta_tx_prime = aggregated_data[ref_anchor][1]['tx'] - aggregated_data[ref_anchor][0]['tx']
-        delta_rx_prime = aggregated_data[ref_anchor][1]['rx'] - aggregated_data[ref_anchor][0]['rx']
+        delta_tx_prime = wrap_diff(aggregated_data[ref_anchor][1]['tx'], aggregated_data[ref_anchor][0]['tx'], bits=32, signed=False) 
+        delta_rx_prime = wrap_diff(aggregated_data[ref_anchor][1]['rx'], aggregated_data[ref_anchor][0]['rx'], bits=40, signed=False)
         try: 
             alpha = delta_rx_prime/delta_tx_prime # Conversion factor from ref_anchor clock ticks -> tag clock ticks 
         except ZeroDivisionError:
@@ -151,18 +188,20 @@ class TDOA3_Tag:
                 continue 
             # Checking if one of the msgs we caught from the remote anchor matches the SEQ from reference-remote anchor transaction
             # These MUST match for delta RX to make physical sense. Else, ignore. 
-            if (aggregated_data[remote_anchor][1]['seq']==r_seq): 
-                tag_data_from_remote_anchor = aggregated_data[remote_anchor][1] 
-            elif (aggregated_data[remote_anchor][0]['seq']==r_seq): 
-                tag_data_from_remote_anchor = aggregated_data[remote_anchor][0] 
-            else: 
+            remote_msgs = aggregated_data[remote_anchor]
+            if len(remote_msgs) == 2 and remote_msgs[1]['seq'] == r_seq:
+                tag_data_from_remote_anchor = remote_msgs[1]
+            elif remote_msgs[0]['seq'] == r_seq:  # safe whether len is 1 or 2
+                tag_data_from_remote_anchor = remote_msgs[0]
+            else:
                 continue
             # Outlier check by comparing measured TOF with geometric TOF since we know all anchor positions 
             # NOTE TODO add outlier check with TOF 
             # Computing delta TX in the reference anchor's clock: ref TX info - (ref RX info of the other tag - TOF both tags)
-            delta_tx = aggregated_data[ref_anchor][1]['tx'] - (r_rx - r_tof) 
+            delta_tx = wrap_diff(aggregated_data[ref_anchor][1]['tx'], wrap_diff(r_rx, r_tof, bits=32, signed=False),
+                                  bits=32, signed=True)
             # Computing delta RX in the tag's clock 
-            delta_rx = aggregated_data[ref_anchor][1]['rx'] - tag_data_from_remote_anchor['rx'] 
+            delta_rx = wrap_diff(aggregated_data[ref_anchor][1]['rx'], tag_data_from_remote_anchor['rx'], bits=40, signed=True)
             # Computing TDOA and storing 
             TDoA = (delta_rx - (alpha*delta_tx))*DW1000.TIME_UNIT # ticks->seconds 
             results.append( (TDoA, self.anchors[ref_anchor], self.anchors[remote_anchor]) )
@@ -212,7 +251,7 @@ class TDOA3_Tag:
                 has_dist = msg[id_idx+1]>>7
                 r_seq    = msg[id_idx+1]&0x7F
                 rx_ts    = int.from_bytes(bytes(msg[id_idx+2:id_idx+6]), 'little') 
-                r_tof   = int.from_bytes(bytes(msg[id_idx+6:id_idx+8]), 'little') if has_dist else None # NOTE tof is in radio ticks
+                r_tof    = int.from_bytes(bytes(msg[id_idx+6:id_idx+8]), 'little') if has_dist else None # NOTE tof is in radio ticks
 
                 remote_anchors[r_id] = (r_seq, rx_ts, r_tof)
                 start_idx += 6 + (2 if has_dist else 0) # next anchor index will depend on if this info had a distance
