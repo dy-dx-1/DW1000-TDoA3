@@ -18,4 +18,5 @@ SPI_CS  = 0   # SPI chip select for the DW1000 connection
     # The code will prioritise position information defined here, if it isn't present, it will use the firmware 
     # definition that is shared by the anchors. 
 # Ensure units are consistent between firmware & config.py 
+# NOTE currently expecting meters
 ANCHORS = {} # Expected format is {anchor_id: (x, y, z)}
