@@ -80,7 +80,7 @@ class TDOA3_Tag:
     def update_ref_TOFs(self): 
         """
         Updates the data of TOF_ref_anchors dict in case new anchors were added. 
-        This is punctually more computationaly intensive and memory-innefficient, but overall
+        This is punctually computationaly intensive and memory-innefficient, but overall is readable and 
         allows us to avoid calculating distances over and over while running the algorithm. 
         """
         # TOF_ref_anchors has shape: {anchor_id: {other_anchor_id: TOF}} where TOF is in DW1000 clock ticks 
@@ -93,9 +93,22 @@ class TDOA3_Tag:
                     continue 
                 else: 
                     # NOTE TODO currently expecting meters as anchor position, define this properly 
-                    tof = int((np.linalg.norm(np.array(remote_pos)-np.array(pos))/SPEED_OF_LIGHT)/self._dw.TIME_UNIT) 
+                    tof = int((np.linalg.norm(np.array(remote_pos)-np.array(pos))/SPEED_OF_LIGHT)/DW1000.TIME_UNIT) 
                     self.TOF_ref_anchors[anchor][remote_anchor] = tof 
-        
+
+    def validate_measured_TOF(self, a1:int, a2:int, z_tof:int)->bool: 
+        """
+        Compares the measured TOF between anchors against the geometric expected value to determine 
+        if the exchange is good enough to be used to compute TDOA. This serves as a first line of defense against
+        NLOS/multipath readings. 
+        """
+        # NOTE TODO formalize and calibrate this properly, currently using 50cm 
+        tolerance = 0.5/SPEED_OF_LIGHT/DW1000.TIME_UNIT 
+        expected_tof = self.TOF_ref_anchors[a1][a2] 
+        if abs(z_tof-expected_tof)<=tolerance: 
+            return True 
+        else: 
+            return False
 
     def run(self, enable_print:bool): 
         """
@@ -218,7 +231,8 @@ class TDOA3_Tag:
             else:
                 continue
             # Outlier check by comparing measured TOF with geometric TOF since we know all anchor positions 
-            # NOTE TODO add outlier check with TOF 
+            if not self.validate_measured_TOF(ref_anchor, remote_anchor, r_tof): 
+                continue 
             # Computing delta TX in the reference anchor's clock: ref TX info - (ref RX info of the other tag - TOF both tags)
             delta_tx = wrap_diff(aggregated_data[ref_anchor][1]['tx'], wrap_diff(r_rx, r_tof, bits=32, signed=False),
                                   bits=32, signed=True)
@@ -311,7 +325,10 @@ class TDOA3_Tag:
                 residuals.append(estimated_delta-measured_delta)
             return np.array(residuals) 
         # Non-linear least squares, using last known position as initial guess 
-        result = scipy.optimize.least_squares(tdoa_residuals, np.array(self.position), args=(tdoa_data,), method='lm') 
+        # Using huber to cap the influence of unexpected outliers
+        # Using f_scale of 0.7m for now - to be tuned more in the future 
+        result = scipy.optimize.least_squares(tdoa_residuals, np.array(self.position), args=(tdoa_data,),
+                                               method='trf', loss='huber', f_scale=0.7)  
         if result.success: 
             self.position = tuple(result.x) 
             return self.position 
