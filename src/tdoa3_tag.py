@@ -62,7 +62,8 @@ class TDOA3_Tag:
         # Anchor positions can be pre-defined in config.py to overwrite firmware values. 
         # If a position is not pre-defined, it will be populated with the firmware-defined values published by the anchor in it's messages.
         self.anchors = dict(ANCHORS) # Copy of the config dict. Format {anchor_id: (x,y,z)}
-
+        self.TOF_ref_anchors = {}    # Holds theoretical TOF between anchors. Used for outlier detection. {anchor_id: {other_anchor_id:TOF}}
+        self.update_ref_TOFs() 
         # Guessing an initial position. Will serve as starting point for subsequent optimization in .run() 
         if len(self.anchors)>=1: 
             anchor_pos = np.array( [pos_tuple for pos_tuple in self.anchors.values()] )
@@ -75,6 +76,26 @@ class TDOA3_Tag:
         return self 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._dw.close() 
+
+    def update_ref_TOFs(self): 
+        """
+        Updates the data of TOF_ref_anchors dict in case new anchors were added. 
+        This is punctually more computationaly intensive and memory-innefficient, but overall
+        allows us to avoid calculating distances over and over while running the algorithm. 
+        """
+        # TOF_ref_anchors has shape: {anchor_id: {other_anchor_id: TOF}} where TOF is in DW1000 clock ticks 
+        for anchor, pos in self.anchors.items(): 
+            # If the anchor has no data on others, creating an empty dict 
+            self.TOF_ref_anchors[anchor] = self.TOF_ref_anchors.get(anchor, {})
+            # Compute TOF for all other anchors for which we do not have data on 
+            for remote_anchor, remote_pos in self.anchors.items(): 
+                if remote_anchor==anchor or remote_anchor in self.TOF_ref_anchors[anchor]: 
+                    continue 
+                else: 
+                    # NOTE TODO currently expecting meters as anchor position, define this properly 
+                    tof = int((np.linalg.norm(np.array(remote_pos)-np.array(pos))/SPEED_OF_LIGHT)/self._dw.TIME_UNIT) 
+                    self.TOF_ref_anchors[anchor][remote_anchor] = tof 
+        
 
     def run(self, enable_print:bool): 
         """
@@ -126,6 +147,7 @@ class TDOA3_Tag:
                     print("IT WILL BE IGNORED FOR ALL COMPUTATIONS. Add it's position through firmware or config.py to enable it.")
                     continue 
                 self.anchors[anchor_id] = (anchor_pos[0], anchor_pos[1], anchor_pos[2])
+                self.update_ref_TOFs()
             # Adding to dict
             msg_data = {'seq':seq, 'rx': rx, 'tx': tx_ts, 'remote_data':remote_anchors}
             number_of_msgs = len(parsed_data.get(anchor_id, [])) 
