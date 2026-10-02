@@ -10,20 +10,20 @@ from matplotlib.patches import PathPatch
 import numpy as np
 
 # Anchor positions {anchor_id: (x,y,z), ...}
-ANCHORS = {18: (0,0,18),
+ANCHORS = {5: (0,0,18),
            3: (-57, 72, 127),
            4: (107, 180, 69)}
 # Ranges to anchor {anchor_id: range}
 # Anchors without a range entry are still plotted but without range circle 
-RANGES = {1: 420, 5: 272, 2:345}
+RANGES = {3: 145, 5: 116, 4:141}
 # Position in 3D space, set USE_POSITION to true to OVERWRITE defined RANGES 
 # in that case, the range to each anchor from the position will be computed
 POS = (250, 200, 100) 
 USE_POSITION = False 
 # Display the plot (if you are not running this remotely)
-SHOW_PLOT = True
-# Save the plot (None to not save, else specify path)
-SAVE_PATH = None 
+SHOW_PLOT = False
+# Save the plot (None to not save, else specify path.png)
+SAVE_PATH = "room_test.png" 
 
 def plot_anchor_ranges(
     anchors,
@@ -317,7 +317,16 @@ def plot_anchor_ranges(
 
                 coverage += inside
 
-            overlap = coverage >= 2
+            # Find the greatest number of overlapping circles anywhere
+            # in the plot.
+            max_coverage = coverage.max()
+
+            # Shade ONLY points that are inside that maximum number
+            # of circles.
+            overlap = (
+                (coverage == max_coverage)
+                & (coverage > 1)
+            )
 
             if np.any(overlap):
 
