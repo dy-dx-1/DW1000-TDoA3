@@ -1,10 +1,10 @@
 import struct 
-from .dw1000 import DW1000
+from dw1000 import DW1000
 import scipy.optimize 
 import numpy as np
 import time 
 
-from .config import ANCHORS 
+from config import ANCHORS 
 
 SPEED_OF_LIGHT = 299_702_547 # m/s 
 

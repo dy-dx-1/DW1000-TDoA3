@@ -12,10 +12,11 @@ import numpy as np
 # Anchor positions {anchor_id: (x,y,z), ...}
 ANCHORS = {5: (0,0,18),
            3: (-57, 72, 127),
-           4: (107, 180, 69)}
+           4: (107, 180, 69),
+           999: (200,0,200)} # SIMULATED ONE FOR ROOM TEST
 # Ranges to anchor {anchor_id: range}
 # Anchors without a range entry are still plotted but without range circle 
-RANGES = {3: 145, 5: 116, 4:141}
+RANGES = {3: 145, 5: 116, 4:141, 999:283}
 # Position in 3D space, set USE_POSITION to true to OVERWRITE defined RANGES 
 # in that case, the range to each anchor from the position will be computed
 POS = (250, 200, 100) 
