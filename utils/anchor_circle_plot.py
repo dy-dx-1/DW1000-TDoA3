@@ -1,29 +1,100 @@
 """
-This file is to verify geometric conditions for multilateration. 
-Input the ranges or a position (and the anchor/tag positions) to plot 
-2D projections of the XY, XZ, YZ planes and visualize intersection points. 
+This file is to verify geometric conditions for multilateration.
+
+Input the ranges or a position (and the anchor/tag positions) to plot
+2D projections of the XY, XZ, YZ planes and visualize the least-squares
+TWR residual.
+
+The highlighted region represents locations with the smallest achievable
+3D least-squares range residual, rather than locations where the greatest
+number of projected range circles overlap.
+
+IMPORTANT:
+The range circles shown in each 2D plot are orthogonal projections of
+3D range spheres. They are therefore circles, not ellipses.
+
+The true 3D position does not generally lie on the circumference of the
+projected circle. If the anchor and position have different values in
+the omitted coordinate, the projected position lies INSIDE the circle.
+
+For example, in the XY plane:
+
+    (x - x_anchor)^2 + (y - y_anchor)^2
+        = range^2 - (z - z_anchor)^2
+
+Therefore the projected position is only on the circle when:
+
+    z == z_anchor
 """
+
+
 import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
-from matplotlib.path import Path
-from matplotlib.patches import PathPatch
+from matplotlib.patches import Circle, Patch
+from matplotlib.lines import Line2D
 import numpy as np
 
-# Anchor positions {anchor_id: (x,y,z), ...}
-ANCHORS = {18: (0,0,18),
-           3: (-57, 72, 127),
-           4: (107, 180, 69)}
+
+# ----------------------------------------------------------------------
+# Configuration
+# ----------------------------------------------------------------------
+
+# Anchor positions {anchor_id: (x, y, z), ...}
+ANCHORS = {
+    5: (0, 0, 18),
+    3: (-57, 72, 127),
+    4: (107, 180, 69),
+}
+
 # Ranges to anchor {anchor_id: range}
-# Anchors without a range entry are still plotted but without range circle 
-RANGES = {1: 420, 5: 272, 2:345}
-# Position in 3D space, set USE_POSITION to true to OVERWRITE defined RANGES 
-# in that case, the range to each anchor from the position will be computed
-POS = (250, 200, 100) 
-USE_POSITION = False 
-# Display the plot (if you are not running this remotely)
+# Anchors without a range entry are still plotted but without range circle
+RANGES = {
+    3: 145,
+    5: 116,
+    4: 141,
+}
+
+# Position in 3D space.
+#
+# Set USE_POSITION=True to overwrite RANGES and calculate ranges
+# from this position.
+POS = (250, 200, 100)
+
+USE_POSITION = True
+
+# Display the plot
 SHOW_PLOT = True
-# Save the plot (None to not save, else specify path)
-SAVE_PATH = None 
+
+# Save the plot (None to not save)
+SAVE_PATH = None
+
+
+# ----------------------------------------------------------------------
+# Residual visualization settings
+# ----------------------------------------------------------------------
+
+# Number of points used for the 2D visualization grid.
+RESOLUTION = 600
+
+# Number of points searched along the omitted coordinate when finding
+# the minimum 3D residual for each 2D grid location.
+#
+# Higher values give a more accurate projection of the 3D objective,
+# at the expense of computation time.
+OMITTED_COORDINATE_RESOLUTION = 200
+
+# Highlight the lowest percentage of RMS residual values.
+#
+# For example:
+#   5.0  -> highlight the lowest 5% of RMS residuals
+#   10.0 -> highlight the lowest 10%
+LOW_RESIDUAL_PERCENTILE = 5.0
+
+# Color of the low-residual region.
+RESIDUAL_COLOR = "#FFF2A8"
+
+# Transparency of the highlighted region.
+RESIDUAL_ALPHA = 0.85
+
 
 def plot_anchor_ranges(
     anchors,
@@ -33,57 +104,160 @@ def plot_anchor_ranges(
     show=True,
     save_path=None,
     figsize=(18, 6),
-    dpi=300):
+    dpi=300,
+):
     """
-    Plot anchor positions and their range projections in XY, XZ, and YZ planes.
+    Plot anchor positions, projected 3D range spheres, and
+    least-squares residual projections in the XY, XZ, and YZ planes.
+
+    The multilateration objective is defined in 3D as:
+
+        J(x, y, z) =
+            sum_i [
+                sqrt(
+                    (x - x_i)^2 +
+                    (y - y_i)^2 +
+                    (z - z_i)^2
+                )
+                - r_i
+            ]^2
+
+    where:
+
+        (x_i, y_i, z_i) = position of anchor i
+        r_i              = measured TWR range to anchor i
+
+    Thus, for a candidate position, each individual range residual is:
+
+        e_i = predicted_range_i - measured_range_i
+
+    and the quantity minimized by least-squares multilateration is:
+
+        J = sum_i e_i^2
+
+
+    ------------------------------------------------------------------
+    2D visualization of the 3D objective
+    ------------------------------------------------------------------
+
+    Because multilateration is a 3D problem but the figure contains
+    three 2D planes, simply fixing the omitted coordinate would produce
+    a slice through the 3D objective.
+
+    For example, an XY slice at a fixed z would show:
+
+        J(x, y, z_fixed)
+
+    This can be misleading because the true low-residual region may
+    occur at a different z.
+
+    Instead, this function minimizes the 3D objective over the omitted
+    coordinate for every point in the displayed plane.
+
+    Therefore:
+
+        XY plot:
+            J_XY(x, y) = min_z J(x, y, z)
+
+        XZ plot:
+            J_XZ(x, z) = min_y J(x, y, z)
+
+        YZ plot:
+            J_YZ(y, z) = min_x J(x, y, z)
+
+    Each 2D pixel therefore answers:
+
+        "What is the smallest 3D least-squares residual that can be
+         achieved at this location in the displayed plane, after
+         allowing the omitted coordinate to vary?"
+
+    This produces a minimized projection of the 3D least-squares
+    objective rather than a fixed-coordinate slice.
+
+
+    ------------------------------------------------------------------
+    Range circles
+    ------------------------------------------------------------------
+
+    The circles shown in the 2D plots are NOT 2D range measurements.
+
+    They are the orthogonal projections of the corresponding 3D
+    range spheres.
+
+    A 3D range sphere is:
+
+        (x-x_i)^2 + (y-y_i)^2 + (z-z_i)^2 = r_i^2
+
+    Its projection onto the XY plane is:
+
+        (x-x_i)^2 + (y-y_i)^2 <= r_i^2
+
+    and its boundary is therefore a circle.
+
+    Consequently, the true 3D position may appear inside the projected
+    circle rather than on its circumference.
+
+    For example, in the XY plane:
+
+        (x-x_i)^2 + (y-y_i)^2
+            = r_i^2 - (z-z_i)^2
+
+    so the projected position lies on the circumference only when
+    z == z_i.
+
+    The same principle applies to the XZ and YZ projections.
+
+    Therefore the circles are retained as geometric references rather
+    than being interpreted as exact 2D multilateration constraints.
+
+
+    ------------------------------------------------------------------
+    Highlighted region and contours
+    ------------------------------------------------------------------
+
+    The yellow highlighted region represents the lowest percentage
+    of RMS residual values in each projection.
+
+    The contour lines show progressively higher RMS residual regions,
+    allowing the shape and ambiguity of the solution space to be
+    visualized.
+
+    The visualization does not identify a single solution point.
+    Its purpose is to show the extent and shape of the low-residual
+    solution space.
+
 
     Parameters
     ----------
     anchors : dict
         Mapping:
+
             {anchor_id: (x, y, z)}
 
-        Example:
-            {
-                "A": (0, 0, 0),
-                "B": (4, 2, 1),
-                "C": (2, 5, 3),
-            }
-
-    ranges : dict or None, default=None
+    ranges : dict or None
         Mapping:
+
             {anchor_id: range}
 
         Used when use_position=False.
 
-        Anchors missing from this dictionary are still plotted, but have
-        no range circle.
+        Anchors missing from this dictionary are still plotted, but
+        do not contribute to the multilateration residual.
 
-    position : tuple or None, default=None
+    position : tuple or None
         A 3D position `(x, y, z)`.
 
-        Used when use_position=True. The range for each anchor is then
-        calculated as the Euclidean distance from this position to the
-        anchor.
+        Used when use_position=True.
 
     use_position : bool, default=False
-        Selects how ranges are determined.
-
-        False:
-            Use the `ranges` dictionary.
-
-        True:
-            Ignore `ranges` and calculate the range from `position` to
-            every anchor.
+        If True, ignore the supplied ranges and calculate the range from
+        `position` to every anchor.
 
     show : bool, default=True
         If True, display the figure using plt.show().
 
     save_path : str or None, default=None
         If provided, save the figure as a PNG.
-
-        Example:
-            save_path="anchors.png"
 
     figsize : tuple, default=(18, 6)
         Figure size in inches.
@@ -111,7 +285,10 @@ def plot_anchor_ranges(
                 "position must be provided when use_position=True."
             )
 
-        position = np.asarray(position, dtype=float)
+        position = np.asarray(
+            position,
+            dtype=float,
+        )
 
         if position.shape != (3,):
             raise ValueError(
@@ -126,29 +303,35 @@ def plot_anchor_ranges(
             )
 
     # ------------------------------------------------------------------
-    # Determine the ranges to use
+    # Validate and convert anchor positions
+    # ------------------------------------------------------------------
+
+    anchor_positions = {}
+
+    for anchor_id, anchor_position in anchors.items():
+
+        anchor_position = np.asarray(
+            anchor_position,
+            dtype=float,
+        )
+
+        if anchor_position.shape != (3,):
+            raise ValueError(
+                f"Position for anchor {anchor_id!r} must contain "
+                "exactly three values: (x, y, z)."
+            )
+
+        anchor_positions[anchor_id] = anchor_position
+
+    # ------------------------------------------------------------------
+    # Determine ranges
     # ------------------------------------------------------------------
 
     if use_position:
 
-        # Compute distance from the supplied position to every anchor.
-        #
-        # The resulting dictionary has exactly the same structure as
-        # the normal `ranges` dictionary.
         computed_ranges = {}
 
-        for anchor_id, anchor_position in anchors.items():
-
-            anchor_position = np.asarray(
-                anchor_position,
-                dtype=float,
-            )
-
-            if anchor_position.shape != (3,):
-                raise ValueError(
-                    f"Position for anchor {anchor_id!r} must contain "
-                    "exactly three values: (x, y, z)."
-                )
+        for anchor_id, anchor_position in anchor_positions.items():
 
             computed_ranges[anchor_id] = np.linalg.norm(
                 anchor_position - position
@@ -161,19 +344,51 @@ def plot_anchor_ranges(
         ranges_to_plot = ranges
 
     # ------------------------------------------------------------------
+    # Determine anchors with valid range measurements
+    # ------------------------------------------------------------------
+
+    measured_anchor_ids = []
+
+    for anchor_id in anchors:
+
+        if anchor_id not in ranges_to_plot:
+            continue
+
+        if ranges_to_plot[anchor_id] is None:
+            continue
+
+        radius = float(
+            ranges_to_plot[anchor_id]
+        )
+
+        if radius < 0:
+            raise ValueError(
+                f"Range for anchor {anchor_id!r} cannot be negative."
+            )
+
+        measured_anchor_ids.append(anchor_id)
+
+    if len(measured_anchor_ids) < 2:
+        raise ValueError(
+            "At least two anchors with valid ranges are required."
+        )
+
+    # ------------------------------------------------------------------
     # Colors
     # ------------------------------------------------------------------
 
     colors = plt.cm.tab10(
-        np.linspace(0, 1, max(len(anchors), 1))
+        np.linspace(
+            0,
+            1,
+            max(len(anchors), 1),
+        )
     )
 
     anchor_colors = {
         anchor_id: colors[i % len(colors)]
         for i, anchor_id in enumerate(anchors)
     }
-
-    overlap_color = "#FFF2A8"
 
     # ------------------------------------------------------------------
     # Create figure
@@ -185,17 +400,52 @@ def plot_anchor_ranges(
         figsize=figsize,
     )
 
+    # Each tuple contains:
+    #
+    #   horizontal coordinate
+    #   vertical coordinate
+    #   omitted coordinate
+    #   title
+    #   x-axis label
+    #   y-axis label
+
     planes = [
-        (0, 1, "XY Plane", "X", "Y"),
-        (0, 2, "XZ Plane", "X", "Z"),
-        (1, 2, "YZ Plane", "Y", "Z"),
+        (0, 1, 2, "XY Plane", "X", "Y"),
+        (0, 2, 1, "XZ Plane", "X", "Z"),
+        (1, 2, 0, "YZ Plane", "Y", "Z"),
     ]
+
+    # ------------------------------------------------------------------
+    # Progress tracking
+    # ------------------------------------------------------------------
+
+    total_calculations = (
+        len(planes)
+        * OMITTED_COORDINATE_RESOLUTION
+    )
+
+    completed_calculations = 0
+
+    print(
+        "Calculating least-squares residual space..."
+    )
+
+    print(
+        "Progress: 0%",
+        end="",
+        flush=True,
+    )
+
+    next_progress = 10
 
     # ------------------------------------------------------------------
     # Plot each projection
     # ------------------------------------------------------------------
 
-    for ax, (i, j, title, xlabel, ylabel) in zip(axes, planes):
+    for ax, (i, j, k, title, xlabel, ylabel) in zip(
+        axes,
+        planes,
+    ):
 
         # --------------------------------------------------------------
         # Build circle information
@@ -203,26 +453,12 @@ def plot_anchor_ranges(
 
         circle_data = []
 
-        for anchor_id, anchor_position in anchors.items():
+        for anchor_id in measured_anchor_ids:
 
-            # In normal range mode, anchors missing from ranges have
-            # no circle.
-            if anchor_id not in ranges_to_plot:
-                continue
+            anchor_position = anchor_positions[anchor_id]
 
-            radius = ranges_to_plot[anchor_id]
-
-            if radius is None:
-                continue
-
-            if radius < 0:
-                raise ValueError(
-                    f"Range for anchor {anchor_id!r} cannot be negative."
-                )
-
-            anchor_position = np.asarray(
-                anchor_position,
-                dtype=float,
+            radius = float(
+                ranges_to_plot[anchor_id]
             )
 
             circle_data.append({
@@ -237,16 +473,16 @@ def plot_anchor_ranges(
         # --------------------------------------------------------------
 
         all_x = [
-            position[i]
-            for position in anchors.values()
+            anchor_positions[anchor_id][i]
+            for anchor_id in anchors
         ]
 
         all_y = [
-            position[j]
-            for position in anchors.values()
+            anchor_positions[anchor_id][j]
+            for anchor_id in anchors
         ]
 
-        # Include circle extents.
+        # Include projected range-circle extents.
         for circle in circle_data:
 
             all_x.extend([
@@ -269,80 +505,211 @@ def plot_anchor_ranges(
         dx = max_x - min_x
         dy = max_y - min_y
 
-        margin_x = max(dx * 0.08, 0.5)
-        margin_y = max(dy * 0.08, 0.5)
+        margin_x = max(
+            dx * 0.08,
+            0.5,
+        )
+
+        margin_y = max(
+            dy * 0.08,
+            0.5,
+        )
 
         plot_min_x = min_x - margin_x
         plot_max_x = max_x + margin_x
+
         plot_min_y = min_y - margin_y
         plot_max_y = max_y + margin_y
 
         # --------------------------------------------------------------
-        # Draw overlap regions
+        # Build 2D grid
         # --------------------------------------------------------------
 
-        if len(circle_data) >= 2:
+        grid_x = np.linspace(
+            plot_min_x,
+            plot_max_x,
+            RESOLUTION,
+        )
 
-            resolution = 600
+        grid_y = np.linspace(
+            plot_min_y,
+            plot_max_y,
+            RESOLUTION,
+        )
 
-            grid_x = np.linspace(
-                plot_min_x,
-                plot_max_x,
-                resolution,
-            )
+        X, Y = np.meshgrid(
+            grid_x,
+            grid_y,
+        )
 
-            grid_y = np.linspace(
-                plot_min_y,
-                plot_max_y,
-                resolution,
-            )
+        # --------------------------------------------------------------
+        # Determine range of omitted coordinate
+        # --------------------------------------------------------------
 
-            X, Y = np.meshgrid(
-                grid_x,
-                grid_y,
-            )
+        omitted_anchor_values = np.array([
+            anchor_positions[anchor_id][k]
+            for anchor_id in measured_anchor_ids
+        ])
 
-            coverage = np.zeros_like(
+        max_range = max(
+            float(ranges_to_plot[anchor_id])
+            for anchor_id in measured_anchor_ids
+        )
+
+        omitted_min = (
+            omitted_anchor_values.min()
+            - max_range
+        )
+
+        omitted_max = (
+            omitted_anchor_values.max()
+            + max_range
+        )
+
+        omitted_values = np.linspace(
+            omitted_min,
+            omitted_max,
+            OMITTED_COORDINATE_RESOLUTION,
+        )
+
+        # --------------------------------------------------------------
+        # Calculate minimized 3D least-squares objective
+        # --------------------------------------------------------------
+
+        min_objective = np.full(
+            X.shape,
+            np.inf,
+            dtype=float,
+        )
+
+        for omitted_coordinate in omitted_values:
+
+            objective = np.zeros_like(
                 X,
-                dtype=np.uint16,
+                dtype=float,
             )
 
-            for circle in circle_data:
+            for anchor_id in measured_anchor_ids:
 
-                inside = (
-                    (X - circle["x"]) ** 2
-                    + (Y - circle["y"]) ** 2
-                    <= circle["radius"] ** 2
+                anchor_position = anchor_positions[anchor_id]
+
+                measured_range = float(
+                    ranges_to_plot[anchor_id]
                 )
 
-                coverage += inside
-
-            overlap = coverage >= 2
-
-            if np.any(overlap):
-
-                overlap_mask = np.ma.masked_where(
-                    ~overlap,
-                    np.ones_like(
-                        coverage,
-                        dtype=float,
-                    ),
+                predicted_range = np.sqrt(
+                    (X - anchor_position[i]) ** 2
+                    + (Y - anchor_position[j]) ** 2
+                    + (
+                        omitted_coordinate
+                        - anchor_position[k]
+                    ) ** 2
                 )
 
-                ax.pcolormesh(
-                    X,
-                    Y,
-                    overlap_mask,
-                    shading="auto",
-                    cmap=plt.matplotlib.colors.ListedColormap(
-                        [overlap_color]
-                    ),
-                    alpha=0.85,
-                    zorder=1,
+                residual = (
+                    predicted_range
+                    - measured_range
                 )
+
+                objective += residual ** 2
+
+            # Keep only the lowest objective value found for each
+            # 2D location.
+            min_objective = np.minimum(
+                min_objective,
+                objective,
+            )
+
+            # ----------------------------------------------------------
+            # Update progress
+            # ----------------------------------------------------------
+
+            completed_calculations += 1
+
+            progress = int(
+                completed_calculations
+                / total_calculations
+                * 100
+            )
+
+            if (
+                progress >= next_progress
+                and next_progress <= 100
+            ):
+
+                print(
+                    f" -> {next_progress}%",
+                    end="",
+                    flush=True,
+                )
+
+                next_progress += 10
 
         # --------------------------------------------------------------
-        # Draw circle outlines
+        # Convert sum of squared residuals to RMS residual
+        # --------------------------------------------------------------
+
+        rms_residual = np.sqrt(
+            min_objective
+            / len(measured_anchor_ids)
+        )
+
+        # --------------------------------------------------------------
+        # Highlight the low-residual region
+        # --------------------------------------------------------------
+
+        threshold = np.percentile(
+            rms_residual,
+            LOW_RESIDUAL_PERCENTILE,
+        )
+
+        low_residual = (
+            rms_residual <= threshold
+        )
+
+        residual_mask = np.ma.masked_where(
+            ~low_residual,
+            np.ones_like(rms_residual),
+        )
+
+        ax.pcolormesh(
+            X,
+            Y,
+            residual_mask,
+            shading="auto",
+            cmap=plt.matplotlib.colors.ListedColormap(
+                [RESIDUAL_COLOR]
+            ),
+            alpha=RESIDUAL_ALPHA,
+            zorder=1,
+        )
+
+        # --------------------------------------------------------------
+        # Draw residual contour lines
+        # --------------------------------------------------------------
+
+        levels = np.percentile(
+            rms_residual,
+            [5, 10, 20, 40, 60],
+        )
+
+        levels = np.unique(levels)
+
+        if len(levels) > 1:
+
+            ax.contour(
+                X,
+                Y,
+                rms_residual,
+                levels=levels,
+                colors="darkgoldenrod",
+                linewidths=0.7,
+                alpha=0.45,
+                zorder=2,
+            )
+
+        # --------------------------------------------------------------
+        # Draw projected 3D range-sphere boundaries
         # --------------------------------------------------------------
 
         for circle in circle_data:
@@ -367,12 +734,7 @@ def plot_anchor_ranges(
         # Draw ALL anchors
         # --------------------------------------------------------------
 
-        for anchor_id, anchor_position in anchors.items():
-
-            anchor_position = np.asarray(
-                anchor_position,
-                dtype=float,
-            )
+        for anchor_id, anchor_position in anchor_positions.items():
 
             ax.scatter(
                 anchor_position[i],
@@ -399,7 +761,7 @@ def plot_anchor_ranges(
             )
 
         # --------------------------------------------------------------
-        # If using position mode, plot the position itself
+        # If using position mode, plot the supplied position
         # --------------------------------------------------------------
 
         if use_position:
@@ -420,6 +782,7 @@ def plot_anchor_ranges(
         # --------------------------------------------------------------
 
         ax.set_title(title)
+
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
 
@@ -444,10 +807,69 @@ def plot_anchor_ranges(
         )
 
     # ------------------------------------------------------------------
+    # Finish progress display
+    # ------------------------------------------------------------------
+
+    if next_progress <= 100:
+        print(
+            " -> 100%",
+            end="",
+            flush=True,
+        )
+
+    print(" -> Complete!")
+
+    # ------------------------------------------------------------------
     # Legend
     # ------------------------------------------------------------------
 
+    # Anchor entries
     handles, labels = axes[0].get_legend_handles_labels()
+
+    # Yellow region
+    residual_region_handle = Patch(
+        facecolor=RESIDUAL_COLOR,
+        edgecolor="none",
+        alpha=RESIDUAL_ALPHA,
+        label=(
+            f"Lowest {LOW_RESIDUAL_PERCENTILE:g}% "
+            "RMS residual region"
+        ),
+    )
+
+    # Residual contours
+    contour_handle = Line2D(
+        [0],
+        [0],
+        color="darkgoldenrod",
+        linewidth=1.2,
+        alpha=0.65,
+        label="Increasing RMS residual contours",
+    )
+
+    # Range-sphere projection
+    range_circle_handle = Line2D(
+        [0],
+        [0],
+        color="black",
+        linewidth=2,
+        label="Projected 3D range sphere",
+    )
+
+    handles.extend([
+        residual_region_handle,
+        contour_handle,
+        range_circle_handle,
+    ])
+
+    labels.extend([
+        (
+            f"Lowest {LOW_RESIDUAL_PERCENTILE:g}% "
+            "RMS residual region"
+        ),
+        "Increasing RMS residual contours",
+        "Projected 3D range sphere",
+    ])
 
     if handles:
 
@@ -456,10 +878,31 @@ def plot_anchor_ranges(
             labels,
             loc="upper center",
             bbox_to_anchor=(0.5, 1.02),
-            ncol=min(len(handles), 6),
+            ncol=min(
+                len(handles),
+                6,
+            ),
         )
 
-    fig.tight_layout()
+    # ------------------------------------------------------------------
+    # Explanatory note
+    # ------------------------------------------------------------------
+
+    fig.text(
+        0.5,
+        0.015,
+        "Range circles are 2D projections of 3D range spheres; "
+        "the true 3D position may lie inside the projected circle.",
+        ha="center",
+        va="bottom",
+        fontsize=9,
+        color="dimgray",
+    )
+
+    # Leave room for the legend and explanatory note.
+    fig.tight_layout(
+        rect=(0, 0.045, 1, 0.94)
+    )
 
     # ------------------------------------------------------------------
     # Save
@@ -483,5 +926,18 @@ def plot_anchor_ranges(
 
     return fig, axes
 
-if __name__ == "__main__": 
-    plot_anchor_ranges(ANCHORS, RANGES, position=POS, use_position=USE_POSITION, show=SHOW_PLOT, save_path=SAVE_PATH) 
+
+# ----------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------
+
+if __name__ == "__main__":
+
+    plot_anchor_ranges(
+        ANCHORS,
+        RANGES,
+        position=POS,
+        use_position=USE_POSITION,
+        show=SHOW_PLOT,
+        save_path=SAVE_PATH,
+    )
