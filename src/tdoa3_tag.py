@@ -1,10 +1,10 @@
 import struct 
-from .dw1000 import DW1000
+from dw1000 import DW1000
 import scipy.optimize 
 import numpy as np
 import time 
 
-from .config import ANCHORS 
+from config import ANCHORS 
 
 SPEED_OF_LIGHT = 299_702_547 # m/s 
 
@@ -102,6 +102,7 @@ class TDOA3_Tag:
         if the exchange is good enough to be used to compute TDOA. This serves as a first line of defense against
         NLOS/multipath readings. 
         """
+        return True # TODO REMOVE, ONLY HERE FOR ROUGH ROOM TESTING 
         # NOTE TODO formalize and calibrate this properly, currently using 50cm 
         tolerance = 0.5/SPEED_OF_LIGHT/DW1000.TIME_UNIT 
         expected_tof = self.TOF_ref_anchors[a1][a2] 
@@ -132,6 +133,19 @@ class TDOA3_Tag:
             tdoa_anchor_data = self.process_anchor_data(aggregated_data)                
             # Calculating position 
             # use some kind of array manipulation to compute all the tdoas efficiently? 
+            ###########################################################################
+            print(tdoa_anchor_data)
+            # TEMP: add a synthetic baseline until a fourth anchor is available.
+            if tdoa_anchor_data:
+                fake_anchor_pos = (200, 0, 200)
+                reference_anchor_pos = tdoa_anchor_data[0][2]
+                approximate_tag_pos = np.array((5, 72, 9))
+                fake_tdoa = (
+                    np.linalg.norm(approximate_tag_pos - np.array(fake_anchor_pos))
+                    - np.linalg.norm(approximate_tag_pos - np.array(reference_anchor_pos))
+                ) / SPEED_OF_LIGHT
+                tdoa_anchor_data.append((fake_tdoa, fake_anchor_pos, reference_anchor_pos))
+            ###################################################################################
             position = self.multilaterate(tdoa_anchor_data)
             if enable_print: 
                 print(f"[INFO] New position estimated: {position}")
@@ -231,7 +245,8 @@ class TDOA3_Tag:
             else:
                 continue
             # Outlier check by comparing measured TOF with geometric TOF since we know all anchor positions 
-            if not self.validate_measured_TOF(ref_anchor, remote_anchor, r_tof): 
+            if not self.validate_measured_TOF(ref_anchor, remote_anchor, r_tof):
+                print("outlier test did not pass") 
                 continue 
             # Computing delta TX in the reference anchor's clock: ref TX info - (ref RX info of the other tag - TOF both tags)
             delta_tx = wrap_diff(aggregated_data[ref_anchor][1]['tx'], wrap_diff(r_rx, r_tof, bits=32, signed=False),

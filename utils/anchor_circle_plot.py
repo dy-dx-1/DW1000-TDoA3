@@ -33,6 +33,7 @@ from matplotlib.patches import Circle, Patch
 from matplotlib.lines import Line2D
 import numpy as np
 
+<<<<<<< HEAD
 
 # ----------------------------------------------------------------------
 # Configuration
@@ -95,6 +96,24 @@ RESIDUAL_COLOR = "#FFF2A8"
 # Transparency of the highlighted region.
 RESIDUAL_ALPHA = 0.85
 
+=======
+# Anchor positions {anchor_id: (x,y,z), ...}
+ANCHORS = {5: (0,0,18),
+           3: (-57, 72, 127),
+           4: (107, 180, 69),
+           999: (200,0,200)} # SIMULATED ONE FOR ROOM TEST
+# Ranges to anchor {anchor_id: range}
+# Anchors without a range entry are still plotted but without range circle 
+RANGES = {3: 145, 5: 116, 4:141, 999:283}
+# Position in 3D space, set USE_POSITION to true to OVERWRITE defined RANGES 
+# in that case, the range to each anchor from the position will be computed
+POS = (250, 200, 100) 
+USE_POSITION = False 
+# Display the plot (if you are not running this remotely)
+SHOW_PLOT = False
+# Save the plot (None to not save, else specify path.png)
+SAVE_PATH = "room_test.png" 
+>>>>>>> 0b3ca437d1e7d18394df7173341256ae4915f98e
 
 def plot_anchor_ranges(
     anchors,
@@ -597,6 +616,7 @@ def plot_anchor_ranges(
                     ranges_to_plot[anchor_id]
                 )
 
+<<<<<<< HEAD
                 predicted_range = np.sqrt(
                     (X - anchor_position[i]) ** 2
                     + (Y - anchor_position[j]) ** 2
@@ -604,6 +624,29 @@ def plot_anchor_ranges(
                         omitted_coordinate
                         - anchor_position[k]
                     ) ** 2
+=======
+                coverage += inside
+
+            # Find the greatest number of overlapping circles anywhere
+            # in the plot.
+            max_coverage = coverage.max()
+
+            # Shade ONLY points that are inside that maximum number
+            # of circles.
+            overlap = (
+                (coverage == max_coverage)
+                & (coverage > 1)
+            )
+
+            if np.any(overlap):
+
+                overlap_mask = np.ma.masked_where(
+                    ~overlap,
+                    np.ones_like(
+                        coverage,
+                        dtype=float,
+                    ),
+>>>>>>> 0b3ca437d1e7d18394df7173341256ae4915f98e
                 )
 
                 residual = (
