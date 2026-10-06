@@ -27,7 +27,7 @@ ANCHOR_IDS = [1,2,3,4,5,6,7,8] # can be a single int or a list
 # Configuration parameters; set to None to leave them unchanged
 ANCHOR_POS = (1,1,1)      # (x, y, z) 
 REBOOT = None          # 1 = reboot to firmware, 2 = reboot to bootloader
-MODE = 3               # 1 = TWR, 2 = TDOA2, 3 = TDOA3
+MODE = 1               # 1 = TWR, 2 = TDOA2, 3 = TDOA3
 UWB_POWER = None       # (smart_tx_enabled, force_tx_enabled, 32bit_tx_power_value). Example: Force max power: (0, 1, 0xFFFFFFFF)
 # NOTE: Careful with UWB settings - if you want to change them back, you will have to change the DW1000 settings below 
 # the DW1000 is config'ed by default to match normal operation (0,0). 
@@ -126,9 +126,9 @@ if __name__ == "__main__":
                     time.sleep(0.1)
                 time.sleep(0.2)
 
-    print(f"ANCHOR {ANCHOR_ID} HAS BEEN CONFIGURED:")
-    print(f"  anchor_pos      = {ANCHOR_POS}")
-    print(f"  reboot          = {REBOOT}")
-    print(f"  mode            = {MODE}")
-    print(f"  uwb_power       = {UWB_POWER}")
-    print(f"  uwb_radio       = {UWB_RADIO}")
+            print(f"ANCHOR {ANCHOR_ID} HAS BEEN CONFIGURED:")
+            print(f"  anchor_pos      = {ANCHOR_POS}")
+            print(f"  reboot          = {REBOOT}")
+            print(f"  mode            = {MODE}")
+            print(f"  uwb_power       = {UWB_POWER}")
+            print(f"  uwb_radio       = {UWB_RADIO}")
