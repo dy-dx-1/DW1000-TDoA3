@@ -116,6 +116,7 @@ class TDOA3_Tag:
         Starts an infinite loop that runs continuous localization of the tag. 
         TODO Add CSV buffering+saving? Future ROS publishing? 
         """
+        saver = [] # list of lists of raw data. 10 items of 1s recordings TEMP
         while True: 
             # Gathering anchor data 
             raw_data = [] 
@@ -125,6 +126,13 @@ class TDOA3_Tag:
                 if pkt: # rx is None if and only if pkt is None per DW1000 class methods.
                     # We don't process the pkts yet to ensure we get as much info as possible 
                     raw_data.append((pkt, rx))
+            saver.append(raw_data)
+            if len(saver)==10: 
+                import pickle 
+                with open("10_1s_raw_datas.pkl", "wb") as file:
+                    pickle.dump(saver, file)
+                print(f"SAVED {len(saver)} ITEMS IN SAVER LIST. {type(saver[0])=}")
+                return 
             # Now that out of gathering info loop, parsing & organizing the data 
             # Using a dict {anchor_id: [{rx_t-1, tx_t-1, remote_data_t-1}, {rx, tx, remote_data}]}
             # Only keep the latest 2 messages for any anchor (need fresh data for calculations)
@@ -134,21 +142,10 @@ class TDOA3_Tag:
             # Calculating position 
             # use some kind of array manipulation to compute all the tdoas efficiently? 
             ###########################################################################
-            print(tdoa_anchor_data)
-            # TEMP: add a synthetic baseline until a fourth anchor is available.
-            if tdoa_anchor_data:
-                fake_anchor_pos = (200, 0, 200)
-                reference_anchor_pos = tdoa_anchor_data[0][2]
-                approximate_tag_pos = np.array((5, 72, 9))
-                fake_tdoa = (
-                    np.linalg.norm(approximate_tag_pos - np.array(fake_anchor_pos))
-                    - np.linalg.norm(approximate_tag_pos - np.array(reference_anchor_pos))
-                ) / SPEED_OF_LIGHT
-                tdoa_anchor_data.append((fake_tdoa, fake_anchor_pos, reference_anchor_pos))
-            ###################################################################################
+            #print(tdoa_anchor_data)
             position = self.multilaterate(tdoa_anchor_data)
             if enable_print: 
-                print(f"[INFO] New position estimated: {position}")
+                print(f"[INFO] -----> New position estimated: {position}")
     
     def aggregate_raw_pkts(self, data:list[tuple[int, int]])->dict[int, list[dict]]: 
         """
