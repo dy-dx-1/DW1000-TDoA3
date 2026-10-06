@@ -22,7 +22,7 @@ Flags are documented in the firmware as:
 """
 ########################################## CONFIGURATION AREA - CHANGE THESE PARAMS ##########################################
 # Target anchor - unfortunately can't change ID remotely
-ANCHOR_ID = 5
+ANCHOR_IDS = [1,2,3,4,5,6,7,8] # can be a single int or a list
 
 # Configuration parameters; set to None to leave them unchanged
 ANCHOR_POS = (1,1,1)      # (x, y, z) 
@@ -105,21 +105,26 @@ if __name__ == "__main__":
         raise SystemExit(str(exc)) from exc
 
     with DW1000(0, 0, 2, 64, 6.8, 128, 9, True, None) as dw:
-        # NOTE: SOURCE_ADDR SET TO 0, ELSE ANCHOR FIRMWARE WILL REJECT MODIFS WHEN IN TWR MODE!
-        header = [0x41, 0xDC, 0x00, 0xCF, 0xBC] + list(ANCHOR_ID.to_bytes(6, 'little') + b'\xcf\xbc') + ([0]*6+[0xCF, 0xBC]) + [LPP_SHORT_TAG] 
-        
-        # If the tag is already in TWR mode, an internal check is performed to ensure the ID of the sender matches the latest ID the tag communicated with
-        # Sending a POLL request resets this variable (curr_tag in the firmware), which allows us to set the source address to 0 and have the anchor accept the modifs
-        if MODE!=1: 
-            poll = header[:-1] + [0x01] + [0x01]  # sending a random POLL with SEQ 1 to reset curr_tag to 0 in firmware
-            dw.transmit(poll, False) 
 
-        for cfg in config_messages:
-            msg = header + cfg
-            for _ in range(3):
-                dw.transmit(data=msg, ranging=False)
-                time.sleep(0.1)
-            time.sleep(0.2)
+        if isinstance(ANCHOR_IDS, int): 
+            ANCHOR_IDS = [ANCHOR_IDS]
+
+        for ANCHOR_ID in ANCHOR_IDS: 
+            # NOTE: SOURCE_ADDR SET TO 0, ELSE ANCHOR FIRMWARE WILL REJECT MODIFS WHEN IN TWR MODE!
+            header = [0x41, 0xDC, 0x00, 0xCF, 0xBC] + list(ANCHOR_ID.to_bytes(6, 'little') + b'\xcf\xbc') + ([0]*6+[0xCF, 0xBC]) + [LPP_SHORT_TAG] 
+            
+            # If the tag is already in TWR mode, an internal check is performed to ensure the ID of the sender matches the latest ID the tag communicated with
+            # Sending a POLL request resets this variable (curr_tag in the firmware), which allows us to set the source address to 0 and have the anchor accept the modifs
+            if MODE!=1: 
+                poll = header[:-1] + [0x01] + [0x01]  # sending a random POLL with SEQ 1 to reset curr_tag to 0 in firmware
+                dw.transmit(poll, False) 
+
+            for cfg in config_messages:
+                msg = header + cfg
+                for _ in range(3):
+                    dw.transmit(data=msg, ranging=False)
+                    time.sleep(0.1)
+                time.sleep(0.2)
 
     print(f"ANCHOR {ANCHOR_ID} HAS BEEN CONFIGURED:")
     print(f"  anchor_pos      = {ANCHOR_POS}")
