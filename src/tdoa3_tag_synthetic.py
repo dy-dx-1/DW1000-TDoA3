@@ -6,6 +6,9 @@ import time
 from collections import deque, defaultdict
 HISTORY = 8        # observed lag is up to 4 packets from testing 
 SEQ_MASK = 0x7F    # TDoA3 seq is 7 bits
+MAX_ALPHA_ERROR_PPM = 150
+MAX_ALPHA_MEDIAN_DEVIATION_PPM = 10
+ALPHA_HISTORY = 8
 
 from config import ANCHORS 
 
@@ -14,7 +17,6 @@ SPEED_OF_LIGHT = 299_702_547 # m/s
 # Mock DW1000 to simulate time unit without needing spidev 
 class DW1000: 
     TIME_UNIT = 1.5650040064102565e-11
-
 
 def wrap_diff(a, b, bits:int, signed:bool=True):
     """
@@ -42,16 +44,23 @@ def wrap_diff(a, b, bits:int, signed:bool=True):
           reinterpreted as signed (values in the upper half of the
           range become negative).
 
-    Only valid if the true (unwrapped) magnitude of a - b is less than
-    half the counter's range: 2**31 ticks (~33.55 ms) for bits=32,
-    2**39 ticks (~8.6 s) for bits=40. Both hold comfortably for the
-    quantities we compute here.
+    Signed results are only unambiguous when the true delta's magnitude
+    is less than half the counter's range. The caller must validate that
+    assumption when timestamps can be separated by longer intervals.
     """
     mask = (1 << bits) - 1
-    d = (a - b) & mask
+    d = ((a & mask) - (b & mask)) & mask
     if signed and d >= (1 << (bits - 1)):
-        d -= (1 << bits)
+        d -= 1 << bits
     return d
+
+
+def unwrap_delta(raw_delta: int, reference_delta: float, bits: int) -> int:
+    """Choose the modular alias closest to a delta estimated from another clock."""
+    modulus = 1 << bits
+    wraps = round((reference_delta - raw_delta) / modulus)
+    return raw_delta + wraps * modulus
+
 
 class TDOA3_Tag: 
     """
@@ -63,6 +72,7 @@ class TDOA3_Tag:
 
         self.history = defaultdict(lambda: deque(maxlen=HISTORY))   # anchor_id -> msgs, oldest first
         self.fresh_anchors = set()                                  # anchors that got a new msg in the last batch
+        self.alpha_history = defaultdict(lambda: deque(maxlen=ALPHA_HISTORY))
 
         # Anchor positions can be pre-defined in config.py to overwrite firmware values. 
         # If a position is not pre-defined, it will be populated with the firmware-defined values published by the anchor in it's messages.
@@ -72,10 +82,12 @@ class TDOA3_Tag:
         # Guessing an initial position. Will serve as starting point for subsequent optimization in .run() 
         if len(self.anchors)>=1: 
             anchor_pos = np.array( [pos_tuple for pos_tuple in self.anchors.values()] )
-            initial_pos = np.mean(anchor_pos, axis=0) # Geometric centroid of the anchors 
-            self.position = (initial_pos[0], initial_pos[1], initial_pos[2])
+            initial_pos = np.mean(anchor_pos, axis=0) # Geometric centroid of the anchors
+            self.initial = initial_pos # TEMP TODO NOTE testing - safe anchoring of solver  
+            #self.position = (initial_pos[0], initial_pos[1], initial_pos[2])
         else: 
-            self.position = (0,0,0) # If we don't have any info, try (0,0,0). NOTE todo in future: evaluate how this actually performs. If needed, shift this to on first listen when can use firmware positions of anchors to help. 
+            pass 
+            #self.position = (0,0,0) # If we don't have any info, try (0,0,0). NOTE todo in future: evaluate how this actually performs. If needed, shift this to on first listen when can use firmware positions of anchors to help. 
         
     def __enter__(self):
         return self 
@@ -109,10 +121,10 @@ class TDOA3_Tag:
         NLOS/multipath readings. 
         """
         return True # TODO REMOVE, ONLY HERE FOR ROUGH ROOM TESTING 
-        # NOTE TODO formalize and calibrate this properly, currently using 50cm 
-        tolerance = 0.5/SPEED_OF_LIGHT/DW1000.TIME_UNIT 
+        # NOTE TODO formalize and calibrate this properly, currently using 100cm 
+        tolerance = 1/SPEED_OF_LIGHT/DW1000.TIME_UNIT 
         expected_tof = self.TOF_ref_anchors[a1][a2] 
-        if abs(z_tof-expected_tof)<=tolerance: 
+        if abs(abs(z_tof)-expected_tof)<=tolerance: 
             return True 
         else: 
             return False
@@ -126,20 +138,19 @@ class TDOA3_Tag:
         """
         ################################## 
         import numpy as np 
-        avg = [] 
+        avg = []
         # The data from the file is 10 items of 1s recordings 
         import pickle 
         with open("C:/Users/Nicolas/Documents/Github/DW1000-TDoA3/src/10_1s_raw_datas.pkl", "rb") as file:
             saved_runs = pickle.load(file) 
-        for raw_data in saved_runs: 
+        for raw_data in saved_runs:
         ##################################
             # Now that out of gathering info loop, parsing & organizing the data 
             # Using a dict {anchor_id: [{rx_t-1, tx_t-1, remote_data_t-1}, {rx, tx, remote_data}]}
             # Only keep the latest 2 messages for any anchor (need fresh data for calculations)
             aggregated_data = self.aggregate_raw_pkts(raw_data) 
             # Processing the data into TDOA-anchor pairs 
-            tdoa_anchor_data = self.process_anchor_data(aggregated_data)     
-            print(f"PURE AGGREGATED: {len(aggregated_data)}  |  PROCESSED: {len(tdoa_anchor_data)}")           
+            tdoa_anchor_data = self.process_anchor_data(aggregated_data)          
             # Calculating position 
             # use some kind of array manipulation to compute all the tdoas efficiently? 
             ###########################################################################
@@ -149,7 +160,7 @@ class TDOA3_Tag:
                 if position: 
                     position = tuple(round(i*100) for i in position) 
                     avg.append(position) 
-                #print(f"[INFO] -----> New position estimated: {position}")
+                print(f"[INFO] -----> New position estimated: {position}")
         avg = np.array(avg) 
         print(f"Average: {np.mean(avg, axis=0)}")
         print(f"Median: {np.median(avg, axis=0)}")
@@ -191,7 +202,7 @@ class TDOA3_Tag:
         RETURNS: List of shape [(TDOA, ref_pos, remote_pos), ...]
         """
         best = []
-        for ref_anchor in self.fresh_anchors:
+        for ref_anchor in sorted(self.fresh_anchors):
             results = self._tdoa_from_ref(aggregated_data, ref_anchor)
             if len(results) > len(best):
                 best = results
@@ -213,9 +224,21 @@ class TDOA3_Tag:
             alpha = delta_rx_prime / delta_tx_prime  
         except ZeroDivisionError:
             return results
+        if abs(alpha - 1) > MAX_ALPHA_ERROR_PPM * 1e-6:
+            return results
+        recent_alphas = self.alpha_history[ref_anchor]
+        if (
+            len(recent_alphas) >= 3
+            and abs(alpha - np.median(recent_alphas))
+            > MAX_ALPHA_MEDIAN_DEVIATION_PPM * 1e-6
+        ):
+            return results
+        recent_alphas.append(alpha)
         # Computing TDOA with respect to each remote anchor in the reference anchor's received messages 
         for remote_anchor, (r_seq, r_rx, r_tof) in cur['remote_data'].items():
-            if remote_anchor not in aggregated_data or r_tof is None:
+            if remote_anchor not in aggregated_data:
+                continue
+            if r_tof is None:
                 continue
             # The tag must have independently heard the exact packet the ref reported (same SEQ)
             remote_msg = next((m for m in aggregated_data[remote_anchor] if m['seq'] == r_seq), None)
@@ -223,10 +246,21 @@ class TDOA3_Tag:
                 continue
             if not self.validate_measured_TOF(ref_anchor, remote_anchor, r_tof):
                 continue
-            delta_tx = wrap_diff(cur['tx'], wrap_diff(r_rx, r_tof, bits=32, signed=False),
-                                bits=32, signed=True)
+            remote_tx = wrap_diff(r_rx, r_tof, bits=32, signed=False)
+            delta_tx_unsigned = wrap_diff(cur["tx"], remote_tx, bits=32, signed=False)
             delta_rx = wrap_diff(cur['rx'], remote_msg['rx'], bits=40, signed=True)
+            baseline = float(np.linalg.norm(
+                np.asarray(self.anchors[ref_anchor]) - np.asarray(self.anchors[remote_anchor])
+            ))
+            delta_tx = unwrap_delta(
+                delta_tx_unsigned,
+                delta_rx / alpha,
+                bits=32,
+            )
             TDoA = (delta_rx - alpha * delta_tx) * DW1000.TIME_UNIT
+            tdoa_m = TDoA * SPEED_OF_LIGHT
+            if abs(tdoa_m) > baseline + 0.3:
+                continue
             results.append((TDoA, self.anchors[ref_anchor], self.anchors[remote_anchor]))
         return results
 
@@ -303,7 +337,7 @@ class TDOA3_Tag:
         if len(tdoa_data)<3:
             #print("[INFO] multilaterate() was called with less than 3 measurements, cannot converge.")
             return None 
-        def tdoa_residuals(current_pos_estimate:np.ndarray, tdoa_data): 
+        def tdoa_residuals(current_pos_estimate:np.ndarray, tdoa_data):
             # Residual function: (TDOA corresponding to an estimate - measured TDOA) 
             # IMPORTANT: TDOAs are assumed to be with respect to anchor 1 - anchor 2. 
             residuals = [] 
@@ -315,7 +349,7 @@ class TDOA3_Tag:
         # Non-linear least squares, using last known position as initial guess 
         # Using huber to cap the influence of unexpected outliers
         # Using f_scale of 0.7m for now - to be tuned more in the future 
-        result = scipy.optimize.least_squares(tdoa_residuals, np.array(self.position), args=(tdoa_data,),
+        result = scipy.optimize.least_squares(tdoa_residuals, np.array(self.initial), args=(tdoa_data,),
                                                method='trf', loss='huber', f_scale=0.7)  
         if result.success: 
             self.position = tuple(result.x) 
