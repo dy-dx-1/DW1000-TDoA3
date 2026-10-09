@@ -3,6 +3,10 @@ import scipy.optimize
 import numpy as np
 import time 
 
+from collections import deque, defaultdict
+HISTORY = 8        # observed lag is up to 4 packets from testing 
+SEQ_MASK = 0x7F    # TDoA3 seq is 7 bits
+
 from config import ANCHORS 
 
 SPEED_OF_LIGHT = 299_702_547 # m/s 
@@ -56,6 +60,9 @@ class TDOA3_Tag:
     def __init__(self, id, bus=0, cs=0): 
         #self._dw = DW1000(bus, cs, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
         self.id = id 
+
+        self.history = defaultdict(lambda: deque(maxlen=HISTORY))   # anchor_id -> msgs, oldest first
+        self.fresh_anchors = set()                                  # anchors that got a new msg in the last batch
 
         # Anchor positions can be pre-defined in config.py to overwrite firmware values. 
         # If a position is not pre-defined, it will be populated with the firmware-defined values published by the anchor in it's messages.
@@ -130,12 +137,9 @@ class TDOA3_Tag:
             # Using a dict {anchor_id: [{rx_t-1, tx_t-1, remote_data_t-1}, {rx, tx, remote_data}]}
             # Only keep the latest 2 messages for any anchor (need fresh data for calculations)
             aggregated_data = self.aggregate_raw_pkts(raw_data) 
-            seen_anchors = list(aggregated_data.keys())
-            print(f"{sorted(seen_anchors)}")
-            #data_with_seqs = {id: len(k) for id, k in aggregated_data.items() if len(k)==2}
             # Processing the data into TDOA-anchor pairs 
             tdoa_anchor_data = self.process_anchor_data(aggregated_data)     
-            #print(f"PURE AGGREGATED: {len(aggregated_data)}  | AGGREGATED WITH 2 SUBSEQUENT: {len(data_with_seqs)}  |   PROCESSED: {len(tdoa_anchor_data)}    |  LOST IN PROCESS: {len(tdoa_anchor_data)-len(aggregated_data)}")           
+            print(f"PURE AGGREGATED: {len(aggregated_data)}  |  PROCESSED: {len(tdoa_anchor_data)}")           
             # Calculating position 
             # use some kind of array manipulation to compute all the tdoas efficiently? 
             ###########################################################################
@@ -153,114 +157,78 @@ class TDOA3_Tag:
     
     def aggregate_raw_pkts(self, data:list[tuple[int, int]])->dict[int, list[dict]]: 
         """
-        Takes a list of received raw packets and compiles the data-per anchor in a dict. 
-        
-        ARGS:
-        - data: List of tuples [(raw_packet, local_rx_time)] 
-        
+        Takes a list of received raw packets [(raw_packet, local_rx_time)] and appends them to the
+        per-anchor history (last HISTORY messages, oldest first, gaps allowed).
+
         RETURNS:
-        - Dict of shape {anchor_id: [{rx_t-1, tx_t-1, remote_data_t-1}, {rx, tx, remote_data}]}
-            - For each anchor, only the last 2 messages are kept to compute TDOA. If both are present, the SEQs are subsequent. 
+        - {anchor_id: [msg, ..., msg]} where msg = {seq, rx, tx, remote_data}
+        - self.fresh_anchors is set to the anchors that received a new message in this batch
         """
-        seen_anchors = [] ####### DEBUG 
-        parsed_data = {} 
-        for pkt, rx in data: 
-            interpreted_msg = self.interpret_anchor_msg(pkt) 
-            if interpreted_msg is None: 
-                print("NONEEEE") 
-                continue 
+        self.fresh_anchors = set()
+        for pkt, rx in data:
+            interpreted_msg = self.interpret_anchor_msg(pkt)
+            if interpreted_msg is None:
+                continue
             anchor_id, seq, tx_ts, remote_anchors, anchor_pos = interpreted_msg
-            if anchor_id not in seen_anchors: seen_anchors.append(anchor_id) ############ DEBUG 
-            # Adding anchor_pos to our references if it doesn't exist 
-            if anchor_id not in self.anchors: 
-                if anchor_pos is None: 
+            # Adding anchor_pos to our references if it doesn't exist
+            if anchor_id not in self.anchors:
+                if anchor_pos is None:
                     print(f"[ERROR] ANCHOR {anchor_id} DOES NOT HAVE A POSITION CONFIGURED IN THE FIRMWARE OR config.py.")
                     print("IT WILL BE IGNORED FOR ALL COMPUTATIONS. Add it's position through firmware or config.py to enable it.")
-                    continue 
+                    continue
                 self.anchors[anchor_id] = (anchor_pos[0], anchor_pos[1], anchor_pos[2])
                 self.update_ref_TOFs()
-            # Adding to dict
-            msg_data = {'seq':seq, 'rx': rx, 'tx': tx_ts, 'remote_data':remote_anchors}
-            number_of_msgs = len(parsed_data.get(anchor_id, [])) 
-            if number_of_msgs==0: 
-                # If we haven't added any messages -> initialize the list with one
-                parsed_data[anchor_id] = [msg_data] 
-            elif number_of_msgs==1: 
-                # If we have 1 msg, add this one if it's the subsequent SEQ. Else, flush and keep the freshest 
-                if seq == (parsed_data[anchor_id][0]['seq'] + 1)&0xFF: # &0xFF to wrap the counter if needed
-                    parsed_data[anchor_id].append(msg_data)
-                else: 
-                    parsed_data[anchor_id] = [msg_data] 
-            elif number_of_msgs==2: 
-                # If we have 2 msgs, clear the 1st and add this one if it's subsequent SEQ. Else, flush and keep freshest. 
-                if seq == (parsed_data[anchor_id][1]['seq'] + 1)&0xFF: 
-                    parsed_data[anchor_id].pop(0) 
-                    parsed_data[anchor_id].append(msg_data)
-                else:
-                    parsed_data[anchor_id] = [msg_data] 
-        return parsed_data
+            self.history[anchor_id].append(
+                {'seq': seq, 'rx': rx, 'tx': tx_ts, 'remote_data': remote_anchors})
+            self.fresh_anchors.add(anchor_id)
+        return {a: list(h) for a, h in self.history.items()}
 
-    def process_anchor_data(self, aggregated_data:dict[int, list[dict, dict]]):
+    def process_anchor_data(self, aggregated_data: dict[int, list[dict]])->list[tuple]:
         """
-        Takes an aggregated dict of per-anchor data and computes TDOA with anchor pairs with respect to a reference anchor. 
-        The reference anchor is chosen as the one with most info about the others. 
+        Computes TDOA pairs w.r.t. a single reference anchor. Every anchor with a fresh message is tried
+        as reference; the one that yields the most valid pairs is used.
 
-        ARGS: 
-        - Dict of aggregated data: {anchor_id: [{rx, tx, remote_data}, {rx, tx, remote_data}]}
-            - At least one of the anchors must have data for 2 transactions to be able to compute TDOA with respect to it
-            - If multiple anchors have 2 transaction data, the one with the most remote_data is used as reference 
-            - Item 0 of the list is the oldest data 
-
-        RETURNS:
-        - List of shape [(TDOA, a1_pos, a2_pos), ...] 
+        RETURNS: List of shape [(TDOA, ref_pos, remote_pos), ...]
         """
-        results = [] 
-        # Selecting reference anchor as the one with the largest remote_data that also has 2 subsequent transactions
-        ref_anchor = None 
-        best_remote_size = 0 
-        for anchor_id, data_pair in aggregated_data.items(): 
-            if len(data_pair)<2: 
-                continue 
-            current_remote_size = min(len(data_pair[0]['remote_data']), len(data_pair[1]['remote_data']))
-            if  current_remote_size > best_remote_size:
-                best_remote_size = current_remote_size
-                ref_anchor = anchor_id 
-        if ref_anchor is None: 
-            return results 
-        # Computing alpha for this reference anchor
-        delta_tx_prime = wrap_diff(aggregated_data[ref_anchor][1]['tx'], aggregated_data[ref_anchor][0]['tx'], bits=32, signed=False) 
-        delta_rx_prime = wrap_diff(aggregated_data[ref_anchor][1]['rx'], aggregated_data[ref_anchor][0]['rx'], bits=40, signed=False)
-        try: 
-            alpha = delta_rx_prime/delta_tx_prime # Conversion factor from ref_anchor clock ticks -> tag clock ticks 
+        best = []
+        for ref_anchor in self.fresh_anchors:
+            results = self._tdoa_from_ref(aggregated_data, ref_anchor)
+            if len(results) > len(best):
+                best = results
+        return best
+
+    def _tdoa_from_ref(self, aggregated_data, ref_anchor):
+        results = []
+        ref_data = aggregated_data[ref_anchor]
+        # Need 2 fresh consecutive messages from the ref_anchor to establish alpha 
+        if len(ref_data) < 2: 
+            return results
+        prev, cur = ref_data[-2], ref_data[-1]
+        if (cur['seq'] - prev['seq']) & SEQ_MASK != 1:
+            return results      # missed a packet in between -> clock ratio span too long to trust
+        # Computing alpha (clock correction coefficient from ref_anchor -> tag ticks) 
+        delta_tx_prime = wrap_diff(cur['tx'], prev['tx'], bits=32, signed=False)
+        delta_rx_prime = wrap_diff(cur['rx'], prev['rx'], bits=40, signed=False)
+        try:
+            alpha = delta_rx_prime / delta_tx_prime  
         except ZeroDivisionError:
-            return results # This shouldn't happen but just in case 
-        # Going over all possible ref_anchor -> other anchor pairings and computing TDOA 
-        for remote_anchor, (r_seq, r_rx, r_tof) in aggregated_data[ref_anchor][1]['remote_data'].items(): 
-            if (remote_anchor not in aggregated_data) or (r_tof is None): 
-                # Ignore the data for this anchor if we didn't hear from it or we don't have TOF info to it 
-                continue 
-            # Checking if one of the msgs we caught from the remote anchor matches the SEQ from reference-remote anchor transaction
-            # These MUST match for delta RX to make physical sense. Else, ignore. 
-            remote_msgs = aggregated_data[remote_anchor]
-            if len(remote_msgs) == 2 and remote_msgs[1]['seq'] == r_seq:
-                tag_data_from_remote_anchor = remote_msgs[1]
-            elif remote_msgs[0]['seq'] == r_seq:  # safe whether len is 1 or 2
-                tag_data_from_remote_anchor = remote_msgs[0]
-            else:
+            return results
+        # Computing TDOA with respect to each remote anchor in the reference anchor's received messages 
+        for remote_anchor, (r_seq, r_rx, r_tof) in cur['remote_data'].items():
+            if remote_anchor not in aggregated_data or r_tof is None:
                 continue
-            # Outlier check by comparing measured TOF with geometric TOF since we know all anchor positions 
+            # The tag must have independently heard the exact packet the ref reported (same SEQ)
+            remote_msg = next((m for m in aggregated_data[remote_anchor] if m['seq'] == r_seq), None)
+            if remote_msg is None:
+                continue
             if not self.validate_measured_TOF(ref_anchor, remote_anchor, r_tof):
-                print("outlier test did not pass") 
-                continue 
-            # Computing delta TX in the reference anchor's clock: ref TX info - (ref RX info of the other tag - TOF both tags)
-            delta_tx = wrap_diff(aggregated_data[ref_anchor][1]['tx'], wrap_diff(r_rx, r_tof, bits=32, signed=False),
-                                  bits=32, signed=True)
-            # Computing delta RX in the tag's clock 
-            delta_rx = wrap_diff(aggregated_data[ref_anchor][1]['rx'], tag_data_from_remote_anchor['rx'], bits=40, signed=True)
-            # Computing TDOA and storing 
-            TDoA = (delta_rx - (alpha*delta_tx))*DW1000.TIME_UNIT # ticks->seconds 
-            results.append( (TDoA, self.anchors[ref_anchor], self.anchors[remote_anchor]) )
-        return results 
+                continue
+            delta_tx = wrap_diff(cur['tx'], wrap_diff(r_rx, r_tof, bits=32, signed=False),
+                                bits=32, signed=True)
+            delta_rx = wrap_diff(cur['rx'], remote_msg['rx'], bits=40, signed=True)
+            TDoA = (delta_rx - alpha * delta_tx) * DW1000.TIME_UNIT
+            results.append((TDoA, self.anchors[ref_anchor], self.anchors[remote_anchor]))
+        return results
 
     @staticmethod
     def interpret_anchor_msg(msg:list[int])->tuple[int, int, int, dict, tuple|None]:
@@ -305,7 +273,7 @@ class TDOA3_Tag:
                 id_idx = start_idx 
                 r_id = msg[id_idx]
                 has_dist = msg[id_idx+1]>>7
-                r_seq    = msg[id_idx+1]&0x7F
+                r_seq    = msg[id_idx+1]&SEQ_MASK
                 rx_ts    = int.from_bytes(bytes(msg[id_idx+2:id_idx+6]), 'little') 
                 r_tof    = int.from_bytes(bytes(msg[id_idx+6:id_idx+8]), 'little') if has_dist else None # NOTE tof is in radio ticks
 
