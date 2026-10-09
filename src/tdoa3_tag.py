@@ -277,8 +277,9 @@ class TDOA3_Tag:
         ANCHOR_POS = If available, last 14 bytes (0xF0 for LPP short + 0x01 for anchor pos + 4bytes x 3 floats for the actual position data) 
         """
         BC_TDOA3_DEST_HEADER = [0x41, 0xdc, 0x0,  0x0, 0x0, 0xff, 0x0, 0x0, 0x0, 0x0, 0x0, 0xcf, 0xbc] 
+        ALTERNATIVE_TDOA3_DEST_HEADER = [0x0, 0x0] + BC_TDOA3_DEST_HEADER[2:] # TODO TEMP ONLY HERE UNTIL ALL ANCHORS GO ON THE SAME FIRMWARE
         # Checking if the message has the expected header (BC format and general broadcast to 0xFF + TDOA3 header 0x30) 
-        if msg[:13] != BC_TDOA3_DEST_HEADER or msg[21] != 0x30: 
+        if (msg[:13] != BC_TDOA3_DEST_HEADER and msg[:13] != ALTERNATIVE_TDOA3_DEST_HEADER) or msg[21] != 0x30: 
             return 
         ## Extracting important info from message 
         # Source anchor ID 

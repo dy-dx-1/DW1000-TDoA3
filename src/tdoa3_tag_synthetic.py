@@ -118,9 +118,11 @@ class TDOA3_Tag:
         Correct approx position by TWR: [cm] (243, 263, 10) (Z is truly more like 40!)
         """
         ################################## 
+        import numpy as np 
+        avg = [] 
         # The data from the file is 10 items of 1s recordings 
         import pickle 
-        with open("10_1s_raw_datas.pkl", "rb") as file:
+        with open("C:/Users/Nicolas/Documents/Github/DW1000-TDoA3/src/10_1s_raw_datas.pkl", "rb") as file:
             saved_runs = pickle.load(file) 
         for raw_data in saved_runs: 
         ##################################
@@ -128,17 +130,26 @@ class TDOA3_Tag:
             # Using a dict {anchor_id: [{rx_t-1, tx_t-1, remote_data_t-1}, {rx, tx, remote_data}]}
             # Only keep the latest 2 messages for any anchor (need fresh data for calculations)
             aggregated_data = self.aggregate_raw_pkts(raw_data) 
+            seen_anchors = list(aggregated_data.keys())
+            print(f"{sorted(seen_anchors)}")
+            #data_with_seqs = {id: len(k) for id, k in aggregated_data.items() if len(k)==2}
             # Processing the data into TDOA-anchor pairs 
-            tdoa_anchor_data = self.process_anchor_data(aggregated_data)                
+            tdoa_anchor_data = self.process_anchor_data(aggregated_data)     
+            #print(f"PURE AGGREGATED: {len(aggregated_data)}  | AGGREGATED WITH 2 SUBSEQUENT: {len(data_with_seqs)}  |   PROCESSED: {len(tdoa_anchor_data)}    |  LOST IN PROCESS: {len(tdoa_anchor_data)-len(aggregated_data)}")           
             # Calculating position 
             # use some kind of array manipulation to compute all the tdoas efficiently? 
             ###########################################################################
-            print(f"Passing {len(tdoa_anchor_data)} TDOA measures to multilaterate")
+            #print(f"Passing {len(tdoa_anchor_data)} TDOA measures to multilaterate")
             position = self.multilaterate(tdoa_anchor_data)
             if enable_print: 
                 if position: 
                     position = tuple(round(i*100) for i in position) 
-                print(f"[INFO] -----> New position estimated: {position}")
+                    avg.append(position) 
+                #print(f"[INFO] -----> New position estimated: {position}")
+        avg = np.array(avg) 
+        print(f"Average: {np.mean(avg, axis=0)}")
+        print(f"Median: {np.median(avg, axis=0)}")
+        print(f"STD dev: {np.std(avg, axis=0)}")
     
     def aggregate_raw_pkts(self, data:list[tuple[int, int]])->dict[int, list[dict]]: 
         """
@@ -151,12 +162,15 @@ class TDOA3_Tag:
         - Dict of shape {anchor_id: [{rx_t-1, tx_t-1, remote_data_t-1}, {rx, tx, remote_data}]}
             - For each anchor, only the last 2 messages are kept to compute TDOA. If both are present, the SEQs are subsequent. 
         """
+        seen_anchors = [] ####### DEBUG 
         parsed_data = {} 
         for pkt, rx in data: 
             interpreted_msg = self.interpret_anchor_msg(pkt) 
             if interpreted_msg is None: 
+                print("NONEEEE") 
                 continue 
             anchor_id, seq, tx_ts, remote_anchors, anchor_pos = interpreted_msg
+            if anchor_id not in seen_anchors: seen_anchors.append(anchor_id) ############ DEBUG 
             # Adding anchor_pos to our references if it doesn't exist 
             if anchor_id not in self.anchors: 
                 if anchor_pos is None: 
@@ -270,8 +284,9 @@ class TDOA3_Tag:
         ANCHOR_POS = If available, last 14 bytes (0xF0 for LPP short + 0x01 for anchor pos + 4bytes x 3 floats for the actual position data) 
         """
         BC_TDOA3_DEST_HEADER = [0x41, 0xdc, 0x0,  0x0, 0x0, 0xff, 0x0, 0x0, 0x0, 0x0, 0x0, 0xcf, 0xbc] 
+        ALTERNATIVE_TDOA3_DEST_HEADER = [0x0, 0x0] + BC_TDOA3_DEST_HEADER[2:] # TODO TEMP ONLY HERE UNTIL ALL ANCHORS GO ON THE SAME FIRMWARE
         # Checking if the message has the expected header (BC format and general broadcast to 0xFF + TDOA3 header 0x30) 
-        if msg[:13] != BC_TDOA3_DEST_HEADER or msg[21] != 0x30: 
+        if (msg[:13] != BC_TDOA3_DEST_HEADER and msg[:13] != ALTERNATIVE_TDOA3_DEST_HEADER) or msg[21] != 0x30: 
             return 
         ## Extracting important info from message 
         # Source anchor ID 
@@ -318,7 +333,7 @@ class TDOA3_Tag:
         The TDOA values given should always be with respect to (tag->a1 - tag->a2) 
         """
         if len(tdoa_data)<3:
-            print("[INFO] multilaterate() was called with less than 3 measurements, cannot converge.")
+            #print("[INFO] multilaterate() was called with less than 3 measurements, cannot converge.")
             return None 
         def tdoa_residuals(current_pos_estimate:np.ndarray, tdoa_data): 
             # Residual function: (TDOA corresponding to an estimate - measured TDOA) 
