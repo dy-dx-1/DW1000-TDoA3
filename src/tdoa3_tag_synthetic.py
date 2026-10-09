@@ -14,6 +14,11 @@ from config import ANCHORS
 
 SPEED_OF_LIGHT = 299_702_547 # m/s 
 
+# ANTENNA DELAY FOR ANCHORS FROM BC FIRMWARE - USED FOR TOF VALIDATION NOT FOR TDOA COMPUTE 
+ANTENNA_OFFSET_M = 154.6
+RADIO_TICK_FREQUENCY = 499.2e6 * 128
+ANTENNA_DELAY_TICKS = ANTENNA_OFFSET_M * RADIO_TICK_FREQUENCY / 299_792_458.0
+
 # Mock DW1000 to simulate time unit without needing spidev 
 class DW1000: 
     TIME_UNIT = 1.5650040064102565e-11
@@ -116,18 +121,13 @@ class TDOA3_Tag:
 
     def validate_measured_TOF(self, a1:int, a2:int, z_tof:int)->bool: 
         """
-        Compares the measured TOF between anchors against the geometric expected value to determine 
-        if the exchange is good enough to be used to compute TDOA. This serves as a first line of defense against
-        NLOS/multipath readings. 
+        Compares the reported TOF, including the firmware antenna delay, with
+        the geometric anchor-to-anchor TOF.
         """
-        return True # TODO REMOVE, ONLY HERE FOR ROUGH ROOM TESTING 
-        # NOTE TODO formalize and calibrate this properly, currently using 100cm 
-        tolerance = 1/SPEED_OF_LIGHT/DW1000.TIME_UNIT 
-        expected_tof = self.TOF_ref_anchors[a1][a2] 
-        if abs(abs(z_tof)-expected_tof)<=tolerance: 
-            return True 
-        else: 
-            return False
+        tolerance_m = 0.3
+        tolerance_ticks = tolerance_m / (SPEED_OF_LIGHT * DW1000.TIME_UNIT)
+        expected_tof = self.TOF_ref_anchors[a1][a2] + ANTENNA_DELAY_TICKS
+        return abs(z_tof - expected_tof) <= tolerance_ticks
 
     def run_synthetic(self, enable_print:bool): 
         """

@@ -7,7 +7,14 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from tdoa3_tag_synthetic import unwrap_delta, wrap_diff
+from tdoa3_tag_synthetic import (
+    ANTENNA_DELAY_TICKS,
+    DW1000,
+    SPEED_OF_LIGHT,
+    TDOA3_Tag,
+    unwrap_delta,
+    wrap_diff,
+)
 
 
 class WrapDiffTests(unittest.TestCase):
@@ -55,6 +62,27 @@ class WrapDiffTests(unittest.TestCase):
         self.assertEqual(
             unwrap_delta(modulus - 100, -100, bits=32),
             -100,
+        )
+
+
+class TofValidationTests(unittest.TestCase):
+    def test_expected_tof_includes_firmware_antenna_delay(self):
+        tag = TDOA3_Tag(1)
+        geometric_tof = tag.TOF_ref_anchors[1][2]
+        tolerance_ticks = 1.0 / (SPEED_OF_LIGHT * DW1000.TIME_UNIT)
+
+        self.assertTrue(
+            tag.validate_measured_TOF(
+                1, 2, round(geometric_tof + ANTENNA_DELAY_TICKS)
+            )
+        )
+        self.assertFalse(tag.validate_measured_TOF(1, 2, geometric_tof))
+        self.assertFalse(
+            tag.validate_measured_TOF(
+                1,
+                2,
+                round(geometric_tof + ANTENNA_DELAY_TICKS + 2 * tolerance_ticks),
+            )
         )
 
 
