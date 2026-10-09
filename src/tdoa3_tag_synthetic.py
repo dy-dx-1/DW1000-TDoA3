@@ -133,9 +133,11 @@ class TDOA3_Tag:
             # Calculating position 
             # use some kind of array manipulation to compute all the tdoas efficiently? 
             ###########################################################################
-            #print(tdoa_anchor_data)
+            print(f"Passing {len(tdoa_anchor_data)} TDOA measures to multilaterate")
             position = self.multilaterate(tdoa_anchor_data)
             if enable_print: 
+                if position: 
+                    position = tuple(round(i*100) for i in position) 
                 print(f"[INFO] -----> New position estimated: {position}")
     
     def aggregate_raw_pkts(self, data:list[tuple[int, int]])->dict[int, list[dict]]: 
