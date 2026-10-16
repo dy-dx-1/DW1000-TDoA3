@@ -2,6 +2,7 @@
 An implementation of Bitcraze's TDoA3 positioning algorithm for a DW1000-based tag, such as the Bitcraze Loco Positioning Deck and Bitcraze Loco Positioning Nodes serving as anchors. 
 
 ## Usage 
+0. You must have at minimum 4 anchors set up. Though it's [recommended](https://www.bitcraze.io/documentation/repository/lps-node-firmware/master/protocols/tdoa3_protocol/) that at any point in the space 5-10 anchors are in range of the tag. 
 1. Ensure all anchors are on the same firmware (code has been tested on version: TODO add link) and in TDOA3 mode
    - You can use `utils/config_loco_node.py` to change their mode/position if needed 
 2. Set relevant parameters in `config.py`
@@ -35,7 +36,16 @@ Therefore, we can write: $TDoA=\delta RX-(\tau_{1}-\tau_{2})$
 To calculate $\delta TX = \tau_{1}-\tau_{2}$, the Bitcraze TDOA3 anchor firmware has the anchors do Two Way Ranging between themselves
 - Since $A_1$ and $A_2$ are doing TWR, the ToF between them is known
 - Any anchor can then estimate, _in their own clock_, when another anchor transmitted, by subtracting the ToF from the time it received the message from the other anchor.
-    - Therefore, any anchor can estimate $\delta TX$ in their own clock. However this result will be in the anchor's clock ticks, whereas we want it in the tag's clock ticks.   
+    - Therefore, any anchor can estimate $\delta TX$ in their own clock. However this result will be in the anchor's clock ticks, whereas we want it in the tag's clock ticks.
+    - To solve this, the tag listens to 2 subsequent transmissions from the same anchor and records the delta between them $\delta rx'$ . In the transmissions, the anchor embeds what it thinks is the delta $\delta tx'$.
+        - The tag can then compute a coefficient that estimates the amount of tag clock ticks per this anchor clock ticks: $\alpha=\frac{\delta rx'}{\delta tx'}$
+
+Putting everything together we get the final formula: $TDoA = \delta Rx - \alpha \delta Tx$ where: 
+- $\delta RX$: Difference in reception times of both anchor's messages
+- $\delta TX$: Difference in transmission times between anchors in one of the anchor's clock
+- $\alpha$: Clock correction coefficient that maps the anchor's clock to the tag's clock
+The position can then be found by calculating the TDoA for each anchor pair and doing non-linear least squares optimization to find the position that best matches the measured TDoA's. 
+
 
 
 
