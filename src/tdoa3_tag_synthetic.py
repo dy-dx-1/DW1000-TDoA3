@@ -61,7 +61,13 @@ def wrap_diff(a, b, bits:int, signed:bool=True):
 
 
 def unwrap_delta(raw_delta: int, reference_delta: float, bits: int) -> int:
-    """Choose the modular alias closest to a delta estimated from another clock."""
+    """Choose the modular alias closest to an independent delta estimate.
+
+    A wrapped counter difference may have multiple valid values separated by
+    its modulus. Unlike a signed ``wrap_diff``, this uses the reference estimate
+    to select the right alias, including differences beyond half the counter
+    range.
+    """
     modulus = 1 << bits
     wraps = round((reference_delta - raw_delta) / modulus)
     return raw_delta + wraps * modulus
@@ -146,8 +152,6 @@ class TDOA3_Tag:
         for raw_data in saved_runs:
         ##################################
             # Now that out of gathering info loop, parsing & organizing the data 
-            # Using a dict {anchor_id: [{rx_t-1, tx_t-1, remote_data_t-1}, {rx, tx, remote_data}]}
-            # Only keep the latest 2 messages for any anchor (need fresh data for calculations)
             aggregated_data = self.aggregate_raw_pkts(raw_data) 
             # Processing the data into TDOA-anchor pairs 
             tdoa_anchor_data = self.process_anchor_data(aggregated_data)          
