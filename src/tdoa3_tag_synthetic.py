@@ -249,18 +249,16 @@ class TDOA3_Tag:
             remote_tx = wrap_diff(r_rx, r_tof, bits=32, signed=False)
             delta_tx_unsigned = wrap_diff(cur["tx"], remote_tx, bits=32, signed=False)
             delta_rx = wrap_diff(cur['rx'], remote_msg['rx'], bits=40, signed=True)
-            baseline = float(np.linalg.norm(
-                np.asarray(self.anchors[ref_anchor]) - np.asarray(self.anchors[remote_anchor])
-            ))
             delta_tx = unwrap_delta(
                 delta_tx_unsigned,
                 delta_rx / alpha,
                 bits=32,
             )
-            TDoA = (delta_rx - alpha * delta_tx) * DW1000.TIME_UNIT
-            tdoa_m = TDoA * SPEED_OF_LIGHT
-            if abs(tdoa_m) > baseline + 0.3:
+            # Distance between anchors can never be > than distance passing through tag
+            tdoa_ticks = delta_rx - alpha * delta_tx
+            if abs(tdoa_ticks) > self.TOF_ref_anchors[ref_anchor][remote_anchor]:
                 continue
+            TDoA = tdoa_ticks * DW1000.TIME_UNIT
             results.append((TDoA, self.anchors[ref_anchor], self.anchors[remote_anchor]))
         return results
 

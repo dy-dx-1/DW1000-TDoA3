@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
@@ -84,6 +85,35 @@ class TofValidationTests(unittest.TestCase):
                 round(geometric_tof + ANTENNA_DELAY_TICKS + 2 * tolerance_ticks),
             )
         )
+
+
+class TdoaBaselineTests(unittest.TestCase):
+    def test_uses_cached_baseline_tof_in_ticks(self):
+        tag = TDOA3_Tag(1)
+        tag.anchors = {1: (0, 0, 0), 2: (100, 0, 0)}
+        tag.TOF_ref_anchors = {1: {2: 100}}
+        aggregated_data = {
+            1: [
+                {"seq": 1, "tx": 0, "rx": 0, "remote_data": {}},
+                {
+                    "seq": 2,
+                    "tx": 10_000,
+                    "rx": 10_000,
+                    "remote_data": {2: (3, 9_000, 0)},
+                },
+            ],
+            2: [{"seq": 3, "rx": 8_899}],
+        }
+
+        with patch.object(tag, "validate_measured_TOF", return_value=True):
+            results = tag._tdoa_from_ref(aggregated_data, 1)
+            self.assertEqual(results, [])
+
+            aggregated_data[2][0]["rx"] = 8_900
+            results = tag._tdoa_from_ref(aggregated_data, 1)
+
+        self.assertEqual(len(results), 1)
+        self.assertAlmostEqual(results[0][0], 100 * DW1000.TIME_UNIT)
 
 
 if __name__ == "__main__":
