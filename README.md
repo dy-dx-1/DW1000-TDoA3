@@ -27,10 +27,13 @@ The TOF with respect to anchor $i$ can be defined as: $TOF_{A_{i}-t}=t_{ir}-\tau
     - This value cannot be directly extracted from an anchor's reporting, because clocks are not synchronized!
 We will solve this through algebraic manipulation:
 
-$TOF_{A_{1}-t}-TOF_{A_{2}-t}=t_{1r}-\tau_{1}-(t_{2r}-\tau_{2})$
+$$
+\boxed{TOF_{A_{1}-t}-TOF_{A_{2}-t}=t_{1r}-\tau_{1}-(t_{2r}-\tau_{2})}
+$$
 
-
-$TOF_{A_{1}-t}-TOF_{A_{2}-t}=t_{1r}-t_{2r}-\tau_{1}+\tau_{2}$ 
+$$
+\boxed{TOF_{A_{1}-t}-TOF_{A_{2}-t}=t_{1r}-t_{2r}-\tau_{1}+\tau_{2}}
+$$ 
 - $TOF_{A_{1}-t}-TOF_{A_{2}-t}$ is the difference in ToF's, which once again is proportional to the difference in distances
 - $t_{1r}-t_{2r}$ is simply the difference in reception times $\delta RX$, already in the tag's clock so easy to measure
 
