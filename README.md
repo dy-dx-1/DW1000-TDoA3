@@ -75,6 +75,15 @@ Since propagation time is proportional to distance, this measurement constrains 
 ### Code Implementation
 #### Configuration 
 `config.py` controls all user-relevant configuration parameters. Anchors and their positions may be defined here in the `ANCHORS` dictionnary. During operation, if the tag hears from an anchor that was not defined in `config.py`, it will add it to it's anchor dict **if and only if** the anchor also broadcasts it's position. Anchor position broadcasts are overwritten by `config.py` if a value is already present there. In other words, one may configure anchor positions in their firmware or at the `config.py` level, with the latter overwritting the former if there's conflict. 
+#### Instantiating the tag
+Create a `TDOA3_Tag` with the tag ID and, if separate from 0, the DW1000 SPI bus and chip-select values. Use it as a context manager (`with TDOA3_Tag(...) as tag:`) so the radio is closed when the block exits.
+
+At initialization, the class copies the configured `ANCHORS` and creates its working state:
+- `history` keeps a bounded deque of recent messages per anchor (`HISTORY` messages), while `fresh_anchors` tracks which anchors sent a message in the latest batch. These are used by the aggregation and processing steps below.
+- `alpha_history` keeps recent clock-correction coefficients per reference anchor to reject sudden outliers during data processing.
+- `TOF_ref_anchors` stores the geometric time of flight between configured anchor pairs, used to validate reported ranging data and reject physically impossible TDoA measurements. It is updated through `update_ref_TOFs()` when a new anchor with a known position is added.
+- `initial` is set to the centroid of the configured anchor positions when at least one anchor is configured. It is the starting estimate used by the position solver.
+
 #### Main localization loop
 The `TDOA3_Tag` class is the main coordinator and is used to derive the different elements of the TDoA equation. It offers continuous localization through the `TDOA3_Tag.run()` method. 
 
@@ -109,7 +118,18 @@ The extracted information is added to the internal `self.history` dict of shape 
 
 We also add anchor ID's that we heard from to the internal set `self.fresh_anchors`, which is refreshed on each call of `aggregate_raw_pkts()`. This allows us to keep old anchor data, while knowing what anchors recentrly transmitted
 
+##### Data processing step: `TDOA3_Tag.process_anchor_data()` and `TDOA3_Tag._tdoa_from_ref()`
+The processing step converts the aggregated messages into TDoA measurements paired with the positions of the anchors involved. `process_anchor_data()` tries each anchor that sent a message in the latest batch as the reference anchor, using `_tdoa_from_ref()` to build measurements from it. It returns the set of measurements from the reference that produced the most valid pairs; if none can be formed, the result is an empty list.
 
+TODO here add a small paragraph explaining why we pick a reference anchor to build TDOA pairs from. Just a small example that shows why we can only build n-1 pairs from n anchors - the rest are linearly dependent pairs and don't add new info. 
 
+For a reference anchor, `_tdoa_from_ref()` first checks that its two newest messages are consecutive according to the wrapping SEQ counter, as this is *required* to evaluate `alpha`. It uses their tag-side reception times and anchor-side transmission times to estimate `alpha`, the conversion from reference-anchor clock ticks to tag-clock ticks. It rejects the reference if the estimate is zero or outside the configured error bounds, or if it differs too much from the recent median; accepted values are added to that anchor's `alpha_history`.
 
+Now that the clock correction coefficient is known, we build TDoA pairs with respect to the reference anchor. The function then considers each remote-anchor report in the reference's newest message. A report is used only when:
+- The tag also *independently* received the exact reported remote message, identified by its SEQ, in its retained history.
+- The report includes a measured time of flight, and that measurement agrees with the geometric reference distance within the validation tolerance.
 
+TODO make the following paragraph a bit easier to follow. Add in-line latex corresponding to the different parts of the TDOA=DeltaRX-alphaDeltaTX equation that are being built here. Also shortly explain why unwrap_delta is used instead of wrap_diff. 
+For each surviving pair, the remote transmission time is estimated from the reference anchor's reported reception time and measured time of flight. The function compares this with the reference transmission time to obtain the inter-anchor transmit-time difference, and uses `alpha` to convert it to the tag's clock domain. It then subtracts that corrected transmit-time difference from the tag's reception-time difference to get the TDoA. Counter wraparound is handled when calculating the differences, and an alternate wrapped transmit-time difference is selected to be consistent with the measured reception-time difference. Measurements whose magnitude exceeds the distance between the anchors are discarded as physically impossible.
+
+Each accepted result is converted from DW1000 clock ticks to seconds and returned as `(TDoA, reference_anchor_position, remote_anchor_position)`. 
