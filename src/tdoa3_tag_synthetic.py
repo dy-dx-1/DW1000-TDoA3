@@ -188,13 +188,14 @@ class TDOA3_Tag:
             # Adding anchor_pos to our references if it doesn't exist
             if anchor_id not in self.anchors:
                 if anchor_pos is None:
-                    print(f"[ERROR] ANCHOR {anchor_id} DOES NOT HAVE A POSITION CONFIGURED IN THE FIRMWARE OR config.py.")
+                    print(f"[WARNING] ANCHOR {anchor_id} DOES NOT HAVE A POSITION CONFIGURED IN THE FIRMWARE OR config.py.")
                     print("IT WILL BE IGNORED FOR ALL COMPUTATIONS. Add it's position through firmware or config.py to enable it.")
                     continue
+                else: 
+                    print(f"[INFO] Anchor {anchor_id} did not have a position configured in config.py, it's firmware value of {anchor_pos} will be used.")
                 self.anchors[anchor_id] = (anchor_pos[0], anchor_pos[1], anchor_pos[2])
                 self.update_ref_TOFs()
-            self.history[anchor_id].append(
-                {'seq': seq, 'rx': rx, 'tx': tx_ts, 'remote_data': remote_anchors})
+            self.history[anchor_id].append( {'seq': seq, 'rx': rx, 'tx': tx_ts, 'remote_data': remote_anchors} )
             self.fresh_anchors.add(anchor_id)
         return {a: list(h) for a, h in self.history.items()}
 
@@ -228,9 +229,11 @@ class TDOA3_Tag:
             alpha = delta_rx_prime / delta_tx_prime  
         except ZeroDivisionError:
             return results
+        # Reject if alpha is too big 
         if abs(alpha - 1) > MAX_ALPHA_ERROR_PPM * 1e-6:
             return results
         recent_alphas = self.alpha_history[ref_anchor]
+        # Reject if alpha changed too much recently 
         if (
             len(recent_alphas) >= 3
             and abs(alpha - np.median(recent_alphas))
