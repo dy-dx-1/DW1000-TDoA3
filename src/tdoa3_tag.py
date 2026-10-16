@@ -5,8 +5,9 @@ import time
 from collections import deque, defaultdict
 
 from dw1000 import DW1000
-from config import ANCHORS 
+from config import ANCHORS, LOCALIZATION_FREQUENCY
 
+RECORDING_DURATION = 1/LOCALIZATION_FREQUENCY # How long we listen before generating an update 
 SPEED_OF_LIGHT = 299_702_547 # m/s 
 HISTORY = 8        # How many messages we record per anchor before overwritting them. Testing showed lag to be up to 4 messages.
 SEQ_MASK = 0x7F    # TDoA3 seq is 7 bits
@@ -144,7 +145,7 @@ class TDOA3_Tag:
             # Gathering anchor data 
             raw_data = [] 
             t1 = time.perf_counter() 
-            while (time.perf_counter()-t1)<1: # TODO formalize update frequency in config 
+            while (time.perf_counter()-t1)<RECORDING_DURATION: 
                 pkt, rx = self._dw.listen(ranging=True) 
                 if pkt: # rx is None if and only if pkt is None per DW1000 class methods.
                     # We don't process the pkts yet to ensure we get as much info as possible 
@@ -162,14 +163,14 @@ class TDOA3_Tag:
 
     def save_runs(self, runs_to_save:int, enable_print:bool): 
         """
-        Saves raw RX data recorded for runs_to_save intervals of TODO update frequency. 
+        Saves raw RX data recorded for runs_to_save intervals of RECORDING_DURATION seconds. 
         """
         saver = [] # list of lists of raw data to save
         while True: 
             # Gathering anchor data 
             raw_data = [] 
             t1 = time.perf_counter() 
-            while (time.perf_counter()-t1)<1: # TODO formalize update frequency in config 
+            while (time.perf_counter()-t1)<RECORDING_DURATION: 
                 pkt, rx = self._dw.listen(ranging=True) 
                 if pkt: # rx is None if and only if pkt is None per DW1000 class methods.
                     # We don't process the pkts yet to ensure we get as much info as possible 

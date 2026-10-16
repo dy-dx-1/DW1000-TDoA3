@@ -2,6 +2,7 @@
 Config file for code deployment. Controls: 
 - Tag SPI connection 
 - Anchor definition 
+- Localization frequency 
 
 TODO add: 
 - Output control (print/csv/ROS?)
@@ -27,3 +28,6 @@ ANCHORS = {1: (4.736, 2.194, 1.213),
            6: (4.582, 6.040, 1.460), 
            7: (0.223, 0.458, 2.190), 
            8: (5.045, 4.194, 1.070)} # Expected format is {anchor_id: (x, y, z)}
+
+################################## OUTPUT CONTROL ##################################
+LOCALIZATION_FREQUENCY = 1  # Frequency of updates in Hz 
