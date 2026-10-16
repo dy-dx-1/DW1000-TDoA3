@@ -72,7 +72,43 @@ TDoA3 therefore corrects the measured reception-time difference by subtracting t
 
 Since propagation time is proportional to distance, this measurement constrains the tag's position to a hyperbola (or a hyperboloid in 3D). The system calculates these measurements for multiple anchor pairs and uses nonlinear least-squares optimization to find the position that best matches them.
 
-### Code
+### Code Implementation
+#### Configuration 
+`config.py` controls all user-relevant configuration parameters. Anchors and their positions may be defined here in the `ANCHORS` dictionnary. During operation, if the tag hears from an anchor that was not defined in `config.py`, it will add it to it's anchor dict **if and only if** the anchor also broadcasts it's position. Anchor position broadcasts are overwritten by `config.py` if a value is already present there. In other words, one may configure anchor positions in their firmware or at the `config.py` level, with the latter overwritting the former if there's conflict. 
+#### Main localization loop
+The `TDOA3_Tag` class is the main coordinator and is used to derive the different elements of the TDoA equation. It offers continuous localization through the `TDOA3_Tag.run()` method. 
+
+`TDOA3_Tag.run()` is an infinite loop that: 
+1. Captures as many UWB packets as possible from the anchors for a duration corresponding to `LOCALIZATION_FREQUENCY` in `config.py`
+    - Relevant function: `DW1000.listen()`
+2. Aggregates the raw data per anchor in a dictionnary: `{anchor_id: [msg, ..., msg]}` where `msg = {seq, rx, tx, remote_data}`
+    - Relevant function: `TDOA3_Tag.aggregate_raw_pkts()`
+3. Processes the raw data into TDOA info for independent anchor pairs in a list: `[(TDOA, anchor_1_pos, anchor_2_pos), ...]`
+    - Relevant function: `TDOA3_Tag.process_anchor_data()`
+4. ***TODO*** - to complete with EKF / multilateration process 
+5. Prints and/or saves the resulting position 
+##### Data aggregation step: `TDOA3_Tag.aggregate_raw_pkts()`
+This function takes a list of the raw packets we heard `[(raw_packet, local_rx_time), ...]` and creates a dict of relevant data per anchor.
+
+We iterate through all raw packets. Each one is passed through `TDOA3_Tag.interpret_anchor_msg()` to validate it's relevance and extract the following: 
+- Anchor ID 
+- Transaction SEQ number
+- Transmission time in the anchor's clock 
+- Remote anchor data reported by the anchor
+    - This is the latest info the anchor had on other anchors in a dict of shape `{remoteAnchorIds: (seq, rx_ts, r_tof), ...}`.  
+        - `seq`: SEQ of the last message the remote anchor sent 
+        - `rx_ts`: Reception time of said message in the anchor's clock (not in the remote's) 
+        - `r_tof`: Measured ToF to this anchor in radio ticks 
+- Anchor position 
+
+Then, anchors that were not defined in `config.py` are added to the tag's internal `anchors` dict with their shared firmware position. If no position is shared, the anchor is ignored and a warning is printed on the terminal.
+
+Just like in `__init__`, any time a new anchor is added, `self.update_ref_TOFs()` is called to make sure distance info between anchors is kept up to date. 
+
+The extracted information is added to the internal `self.history` dict of shape `{anchor_id: [msg, ..., msg]}` where `msg = {seq, rx, tx, remote_data}`. The keys of this dict are `deque` with a max length capped by the `HISTORY` constant. This allows us to retain only relevant messages. In theory, we only need the 2 most recent messages to compute the necessary elements. However, keeping a longer history increases our chances of finding info from matching `SEQ` transactions, which is necessary in `process_anchor_data()`. 
+
+We also add anchor ID's that we heard from to the internal set `self.fresh_anchors`, which is refreshed on each call of `aggregate_raw_pkts()`. This allows us to keep old anchor data, while knowing what anchors recentrly transmitted
+
 
 
 
