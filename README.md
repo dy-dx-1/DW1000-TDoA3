@@ -1,6 +1,13 @@
 # DW1000-TDoA3
 An implementation of Bitcraze's TDoA3 positioning algorithm for a DW1000-based tag, such as the Bitcraze Loco Positioning Deck and Bitcraze Loco Positioning Nodes serving as anchors. 
 
+This README has the following sections:
+1. [Usage](#usage)
+2. [Theoretical principles](#theoretical-principles)
+    1. [A primer on TDoA](#a-primer-on-tdoa)
+    2. [Bitcraze's TDoA3](#bitcrazes-tdoa3)
+3. [Code Implementation](#code-implementation)
+
 ## Usage 
 0. You must have at minimum 4 anchors set up. Though it's [recommended](https://www.bitcraze.io/documentation/repository/lps-node-firmware/master/protocols/tdoa3_protocol/) that at any point in the space 5-10 anchors are in range of the tag. 
 1. Ensure all anchors are on the same firmware (code has been tested on version: TODO add link) and in TDOA3 mode
@@ -65,7 +72,7 @@ TDoA3 therefore corrects the measured reception-time difference by subtracting t
 
 Since propagation time is proportional to distance, this measurement constrains the tag's position to a hyperbola (or a hyperboloid in 3D). The system calculates these measurements for multiple anchor pairs and uses nonlinear least-squares optimization to find the position that best matches them.
 
-
+### Code
 
 
 
