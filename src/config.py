@@ -30,6 +30,6 @@ ANCHORS = {1: (4.736, 2.194, 1.213),
            8: (5.045, 4.194, 1.070)} # Expected format is {anchor_id: (x, y, z)}
 
 ################################## OUTPUT CONTROL ##################################
-LOCALIZATION_FREQUENCY = 1  # Frequency of updates in Hz
+LOCALIZATION_FREQUENCY = 10  # Frequency of updates in Hz
 SAVE_TO_CSV = True
 CSV_SAVE_INTERVAL_SECONDS = 3600  # Flush buffered localization rows at most hourly
