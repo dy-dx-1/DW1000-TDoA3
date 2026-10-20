@@ -162,8 +162,6 @@ class TDOA3_Tag:
             if enable_print: 
                 if position: 
                     position = tuple(round(i*100) for i in position) 
-                    if position[0]==809: 
-                        continue 
                     avg.append(position) 
                 print(f"[INFO] -----> New position estimated: {position}")
         avg = np.array(avg) 
