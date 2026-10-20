@@ -163,7 +163,7 @@ class TDOA3_Tag:
             # Processing the data into TDOA-anchor pairs 
             tdoa_anchor_data = self.process_anchor_data(aggregated_data)                
             # Calculating position 
-            #print(tdoa_anchor_data)
+            print(f"Sending a processed list of size {len(tdoa_anchor_data)}")
             position = self.multilaterate(tdoa_anchor_data)
             if enable_print: 
                 print(f"[INFO] -----> New position estimated: {position}")
