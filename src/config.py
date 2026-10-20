@@ -31,5 +31,5 @@ ANCHORS = {1: (4.736, 2.194, 1.213),
 
 ################################## OUTPUT CONTROL ##################################
 LOCALIZATION_FREQUENCY = 1  # Frequency of updates in Hz
-SAVE_TO_CSV = False
+SAVE_TO_CSV = True
 CSV_SAVE_INTERVAL_SECONDS = 3600  # Flush buffered localization rows at most hourly
