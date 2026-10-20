@@ -135,19 +135,18 @@ class TDOA3_Tag:
         expected_tof = self.TOF_ref_anchors[a1][a2] + ANTENNA_DELAY_TICKS
         return abs(z_tof - expected_tof) <= tolerance_ticks
 
-    def run_synthetic(self, enable_print:bool): 
+    def run_synthetic(self, path:str, enable_print:bool): 
         """
         Copy of run() but uses the synthetic data recorded at the lab to debug
         Parts of the code that are different ONLY for synthetic running are clearly 
         marked by ############# above and below. 
-        Correct approx position by TWR: [cm] (243, 263, 10) (Z is truly more like 40!)
         """
         ################################## 
         import numpy as np 
         avg = []
         # The data from the file is 10 items of 1s recordings 
         import pickle 
-        with open("C:/Users/Nicolas/Documents/Github/DW1000-TDoA3/src/10_1s_raw_datas.pkl", "rb") as file:
+        with open(path, "rb") as file:
             saved_runs = pickle.load(file) 
         for raw_data in saved_runs:
         ##################################
@@ -163,6 +162,8 @@ class TDOA3_Tag:
             if enable_print: 
                 if position: 
                     position = tuple(round(i*100) for i in position) 
+                    if position[0]==809: 
+                        continue 
                     avg.append(position) 
                 print(f"[INFO] -----> New position estimated: {position}")
         avg = np.array(avg) 
