@@ -14,6 +14,25 @@ This README has the following sections:
    - You can use `utils/config_loco_node.py` to change their mode/position if needed 
 2. Set relevant parameters in `config.py`
 3. Run `main.py`
+
+Localization results can be saved by setting `SAVE_TO_CSV = True` in `config.py`.
+The program appends timestamp, known-anchor count, processed-pair count, and
+estimated position coordinates to `tdoa3_tag_<id>.csv` in the working directory.
+Rows are flushed hourly by default. `CSV_SAVE_INTERVAL_SECONDS` is the only
+buffering parameter: it sets both the maximum elapsed time between writes and
+the derived row limit (`LOCALIZATION_FREQUENCY * CSV_SAVE_INTERVAL_SECONDS`),
+rounded up. The row limit bounds memory if localization iterations run faster
+than their configured rate. Pending rows are also flushed when the run loop
+exits due to a Python exception or the tag context manager closes.
+
+At the default 1 Hz rate and 3600-second interval, at most 3600 results are
+buffered. A result row contains a timestamp, two counts, and three coordinates;
+on a typical 64-bit CPython build this is roughly 300-400 bytes of Python object
+memory, or about 1-1.5 MiB for 3600 rows (plus small list/allocator overhead).
+This is an estimate rather than a platform-independent guarantee. To reduce
+buffer RAM or limit data loss on an unclean Python exit, lower
+`CSV_SAVE_INTERVAL_SECONDS`; increasing it reduces SD-card writes but increases
+both the buffer and the amount of unsaved data.
 ## Theoretical principles 
 ### A primer on TDoA
 TDoA stands for _Time Difference of Arrival_. TDoA positioning systems are geometrically grounded by the fact that hyperbolas (and, by extension, hyperboloids) are defined by the set of points $P$ for which the absolute difference in distances to two fixed points, called the _foci_ $F_1$ and $F_2$, is constant: $|PF_{1}-PF_{2}|=2a$.
