@@ -16,8 +16,10 @@ This README has the following sections:
 3. Run `main.py`
 
 Localization results can be saved by setting `SAVE_TO_CSV = True` in `config.py`.
-The program appends timestamp, known-anchor count, processed-pair count, and
-estimated position coordinates to `tdoa3_tag_<id>.csv` in the working directory.
+The program appends timestamp, known-anchor count, aggregated-data size,
+processed-pair count, and estimated position coordinates to
+`tdoa3_tag_<id>.csv` in the working directory. Aggregated-data size is the
+number of anchor entries in that run's `aggregated_data` dictionary.
 Rows are flushed hourly by default. `CSV_SAVE_INTERVAL_SECONDS` is the only
 buffering parameter: it sets both the maximum elapsed time between writes and
 the derived row limit (`LOCALIZATION_FREQUENCY * CSV_SAVE_INTERVAL_SECONDS`),
@@ -26,7 +28,7 @@ than their configured rate. Pending rows are also flushed when the run loop
 exits due to a Python exception or the tag context manager closes.
 
 At the default 1 Hz rate and 3600-second interval, at most 3600 results are
-buffered. A result row contains a timestamp, two counts, and three coordinates;
+buffered. A result row contains a timestamp, three counts, and three coordinates;
 on a typical 64-bit CPython build this is roughly 300-400 bytes of Python object
 memory, or about 1-1.5 MiB for 3600 rows (plus small list/allocator overhead).
 This is an estimate rather than a platform-independent guarantee. To reduce

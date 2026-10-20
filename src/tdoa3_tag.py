@@ -187,6 +187,7 @@ class TDOA3_Tag:
                     self._csv_rows.append((
                         datetime.now().astimezone().isoformat(timespec="milliseconds"),
                         len(self.anchors),
+                        len(aggregated_data),
                         len(tdoa_anchor_data),
                         *coordinates,
                     ))
@@ -209,6 +210,7 @@ class TDOA3_Tag:
                 writer.writerow((
                     "timestamp",
                     "known_anchors",
+                    "aggregated_data_size",
                     "processed_data_pairs",
                     "position_x",
                     "position_y",
