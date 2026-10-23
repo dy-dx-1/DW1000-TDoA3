@@ -6,8 +6,7 @@ import csv
 import math
 from datetime import datetime
 from collections import deque, defaultdict
-
-from dw1000 import DW1000
+from dw1000_spi import DW1000
 from config import (
     ANCHORS,
     LOCALIZATION_FREQUENCY,
