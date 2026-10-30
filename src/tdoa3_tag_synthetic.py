@@ -1,5 +1,4 @@
-import struct 
-import scipy.optimize 
+import struct
 import numpy as np
 import time 
 
@@ -10,9 +9,10 @@ MAX_ALPHA_ERROR_PPM = 150
 MAX_ALPHA_MEDIAN_DEVIATION_PPM = 10
 ALPHA_HISTORY = 8
 
-from config import ANCHORS 
-
-SPEED_OF_LIGHT = 299_702_547 # m/s 
+from config import ANCHORS
+from pose import TDOA3_Pose, CycleUpdate
+import solver
+from solver import SPEED_OF_LIGHT
 
 # ANTENNA DELAY FOR ANCHORS FROM BC FIRMWARE - USED FOR TOF VALIDATION NOT FOR TDOA COMPUTE 
 ANTENNA_OFFSET_M = 154.6
@@ -158,10 +158,18 @@ class TDOA3_Tag:
             # use some kind of array manipulation to compute all the tdoas efficiently? 
             ###########################################################################
             #print(f"Passing {len(tdoa_anchor_data)} TDOA measures to multilaterate")
-            position = self.multilaterate(tdoa_anchor_data)
-            if enable_print: 
-                if position: 
-                    position = tuple(round(i*100) for i in position) 
+            pose = self.multilaterate(tdoa_anchor_data)
+            update = CycleUpdate(
+                stamp_ns=time.time_ns(),
+                n_known_anchors=len(self.anchors),
+                n_aggregated=len(aggregated_data),
+                n_pairs=len(tdoa_anchor_data),
+                pose=pose,
+            )
+            if enable_print:
+                position = None
+                if update.pose is not None:
+                    position = tuple(round(i*100) for i in update.pose.position)
                     avg.append(position) 
                 print(f"[INFO] -----> New position estimated: {position}")
         avg = np.array(avg) 
@@ -325,39 +333,12 @@ class TDOA3_Tag:
 
         return anchor_id, seq, tx_ts, remote_anchors, anchor_pos  
 
-    def multilaterate(self, tdoa_data:list[tuple])->tuple[int,int,int]:
+    def multilaterate(self, tdoa_data:list[tuple])->TDOA3_Pose|None:
         """
-        Use TDoA multilateration to estimate the tag's position. Automatically updates the "position" attribute.\n
-        Returns the estimated position as (x,y,z) coordinates\n 
-        ARGS: 
-        - tdoa_data: A list of tuples representing independent measurements (minimum 3) 
-            - tuple format: (TDOA_measure_seconds, anchor_pos_tuple_1, anchor_pos_tuple_2)
-
-        INFO:\n
-        Position is estimated through non-linear least squares.
-        The residual function is defined as (TDOA corresponding to the current estimated position - measured TDOA by the tag) \n
-        The TDOA values given should always be with respect to (tag->a1 - tag->a2) 
+        Thin wrapper around solver.multilaterate(). Automatically updates the "position" attribute.\n
+        Returns the estimated TDOA3_Pose, or None if no position could be solved.
         """
-        if len(tdoa_data)<3:
-            #print("[INFO] multilaterate() was called with less than 3 measurements, cannot converge.")
-            return None 
-        def tdoa_residuals(current_pos_estimate:np.ndarray, tdoa_data):
-            # Residual function: (TDOA corresponding to an estimate - measured TDOA) 
-            # IMPORTANT: TDOAs are assumed to be with respect to anchor 1 - anchor 2. 
-            residuals = [] 
-            for tdoa, a1_pos, a2_pos in tdoa_data: 
-                estimated_delta = np.linalg.norm(current_pos_estimate - a1_pos) - np.linalg.norm(current_pos_estimate - a2_pos)
-                measured_delta  = tdoa*SPEED_OF_LIGHT # result in meters 
-                residuals.append(estimated_delta-measured_delta)
-            return np.array(residuals) 
-        # Non-linear least squares, using last known position as initial guess 
-        # Using huber to cap the influence of unexpected outliers
-        # Using f_scale of 0.7m for now - to be tuned more in the future 
-        result = scipy.optimize.least_squares(tdoa_residuals, np.array(self.initial), args=(tdoa_data,),
-                                               method='trf', loss='huber', f_scale=0.7)  
-        if result.success: 
-            self.position = tuple(result.x) 
-            return self.position 
-        else: 
-            print(f"[ERROR] Least squares failed to converge {result.message}")
-            return None 
+        pose = solver.multilaterate(tdoa_data, self.initial)
+        if pose is not None:
+            self.position = pose.position
+        return pose

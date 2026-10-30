@@ -1,5 +1,4 @@
-import struct 
-import scipy.optimize 
+import struct
 import numpy as np
 import time 
 import csv
@@ -13,9 +12,11 @@ from config import (
     SAVE_TO_CSV,
     CSV_SAVE_INTERVAL_SECONDS,
 )
+from pose import TDOA3_Pose, CycleUpdate
+import solver
+from solver import SPEED_OF_LIGHT
 
-RECORDING_DURATION = 1/LOCALIZATION_FREQUENCY # How long we listen before generating an update 
-SPEED_OF_LIGHT = 299_702_547 # m/s 
+RECORDING_DURATION = 1/LOCALIZATION_FREQUENCY # How long we listen before generating an update
 HISTORY = 8        # How many messages we record per anchor before overwritting them. Testing showed lag to be up to 4 messages.
 SEQ_MASK = 0x7F    # TDoA3 seq is 7 bits
 # NOTE: TODO empirical tuning of these parameters in the future
@@ -178,16 +179,23 @@ class TDOA3_Tag:
                 tdoa_anchor_data = self.process_anchor_data(aggregated_data)
                 # Calculating position
                 print(f"Sending a processed list of size {len(tdoa_anchor_data)}")
-                position = self.multilaterate(tdoa_anchor_data)
+                pose = self.multilaterate(tdoa_anchor_data)
+                update = CycleUpdate(
+                    stamp_ns=time.time_ns(),
+                    n_known_anchors=len(self.anchors),
+                    n_aggregated=len(aggregated_data),
+                    n_pairs=len(tdoa_anchor_data),
+                    pose=pose,
+                )
                 if enable_print:
-                    print(f"[INFO] -----> New position estimated: {position}")
+                    print(f"[INFO] -----> New position estimated: {pose.position if pose is not None else None}")
                 if SAVE_TO_CSV:
-                    coordinates = position if position is not None else ("", "", "")
+                    coordinates = update.pose.position if update.pose is not None else ("", "", "")
                     self._csv_rows.append((
-                        datetime.now().astimezone().isoformat(timespec="milliseconds"),
-                        len(self.anchors),
-                        len(aggregated_data),
-                        len(tdoa_anchor_data),
+                        datetime.fromtimestamp(update.stamp_ns / 1e9).astimezone().isoformat(timespec="milliseconds"),
+                        update.n_known_anchors,
+                        update.n_aggregated,
+                        update.n_pairs,
                         *coordinates,
                     ))
                     if (len(self._csv_rows) >= max(1,math.ceil(LOCALIZATION_FREQUENCY * CSV_SAVE_INTERVAL_SECONDS),)
@@ -397,39 +405,12 @@ class TDOA3_Tag:
 
         return anchor_id, seq, tx_ts, remote_anchors, anchor_pos  
 
-    def multilaterate(self, tdoa_data:list[tuple])->tuple[int,int,int]:
+    def multilaterate(self, tdoa_data:list[tuple])->TDOA3_Pose|None:
         """
-        Use TDoA multilateration to estimate the tag's position. Automatically updates the "position" attribute.\n
-        Returns the estimated position as (x,y,z) coordinates\n 
-        ARGS: 
-        - tdoa_data: A list of tuples representing independent measurements (minimum 3) 
-            - tuple format: (TDOA_measure_seconds, anchor_pos_tuple_1, anchor_pos_tuple_2)
-
-        INFO:\n
-        Position is estimated through non-linear least squares.
-        The residual function is defined as (TDOA corresponding to the current estimated position - measured TDOA by the tag) \n
-        The TDOA values given should always be with respect to (tag->a1 - tag->a2) 
+        Thin wrapper around solver.multilaterate(). Automatically updates the "position" attribute.\n
+        Returns the estimated TDOA3_Pose, or None if no position could be solved.
         """
-        if len(tdoa_data)<3:
-            #print("[INFO] multilaterate() was called with less than 3 measurements, cannot converge.")
-            return None 
-        def tdoa_residuals(current_pos_estimate:np.ndarray, tdoa_data):
-            # Residual function: (TDOA corresponding to an estimate - measured TDOA) 
-            # IMPORTANT: TDOAs are assumed to be with respect to anchor 1 - anchor 2. 
-            residuals = [] 
-            for tdoa, a1_pos, a2_pos in tdoa_data: 
-                estimated_delta = np.linalg.norm(current_pos_estimate - a1_pos) - np.linalg.norm(current_pos_estimate - a2_pos)
-                measured_delta  = tdoa*SPEED_OF_LIGHT # result in meters 
-                residuals.append(estimated_delta-measured_delta)
-            return np.array(residuals) 
-        # Non-linear least squares, using last known position as initial guess 
-        # Using huber to cap the influence of unexpected outliers
-        # Using f_scale of 0.7m for now - to be tuned more in the future 
-        result = scipy.optimize.least_squares(tdoa_residuals, np.array(self.initial), args=(tdoa_data,),
-                                               method='trf', loss='huber', f_scale=0.7)  
-        if result.success: 
-            self.position = tuple(result.x) 
-            return self.position 
-        else: 
-            print(f"[ERROR] Least squares failed to converge {result.message}")
-            return None 
+        pose = solver.multilaterate(tdoa_data, self.initial)
+        if pose is not None:
+            self.position = pose.position
+        return pose
