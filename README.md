@@ -96,6 +96,8 @@ Since propagation time is proportional to distance, this measurement constrains 
 ### Code Implementation
 #### Configuration 
 `config.py` controls all user-relevant configuration parameters. Anchors and their positions may be defined here in the `ANCHORS` dictionary. During operation, if the tag hears from an anchor that was not defined in `config.py`, it will add it to its internal anchor dictionary **if and only if** the anchor also broadcasts its position. Anchor position broadcasts are overwritten by `config.py` if a value is already present there. In other words, anchor positions may be configured in the firmware or in `config.py`; if there is a conflict, the `config.py` value takes precedence.
+
+All internal computations are done in meters. `UNITS` (`"m"`, `"cm"` or `"mm"`) only sets the unit of the `ANCHORS` dictionary, which is converted to meters before being passed to the tag, and of the output coordinates (console and CSV), which are converted back from the solver's meters and rounded to `DECIMALS` decimals. Firmware anchor positions are always in meters.
 #### Instantiating the tag
 Create a `TDOA3_Tag` with the tag ID and, optionally, the DW1000 SPI bus and chip-select values (both default to 0). Use it as a context manager (`with TDOA3_Tag(...) as tag:`) so the radio is closed when the block exits.
 

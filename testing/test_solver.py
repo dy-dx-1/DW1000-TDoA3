@@ -9,9 +9,12 @@ SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from config import ANCHORS
+from config import ANCHORS as CONFIG_ANCHORS
 from pose import CycleUpdate, TDOA3_Pose
 from solver import SPEED_OF_LIGHT, multilaterate
+from units import anchors_to_meters
+
+ANCHORS = anchors_to_meters(CONFIG_ANCHORS)
 
 
 def make_tdoa_data(tag_pos, ref_id, anchors=ANCHORS):

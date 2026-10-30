@@ -132,7 +132,7 @@ ROS2 = {
 - `publish(update)`: skip if `update.pose` is None or non-finite; count skips and log every `skip_log_every`.
   - `header.stamp` from `update.stamp_ns`: `sec = stamp_ns // 1_000_000_000`, `nanosec = stamp_ns % 1_000_000_000` (integer math). use_sim_time is false, so system time matches the other sensors.
   - `header.frame_id = frame_id`
-  - `pose.position = (x, y, z)` (z = antenna height in 2D); `pose.orientation = (0, 0, 0, 1)` (MUST be a valid quaternion).
+  - `pose.position = (x, y, z)` in meters straight from the solver, ignoring `UNITS`/`DECIMALS` (ROS uses meters, REP 103; those settings only apply to the console and CSV outputs) (z = antenna height in 2D); `pose.orientation = (0, 0, 0, 1)` (MUST be a valid quaternion).
   - `covariance = build_covariance_array(pose, cfg)`.
 - `build_covariance_array(pose, cfg) -> list[float]` is a **pure function with no ROS imports**, kept in a ROS-free module (e.g. `src/outputs/covariance.py`) so tests can import it without rclpy. 36 floats, row-major, order x,y,z,rot_x,rot_y,rot_z:
   - [0] = max(cov_xx, min_var), [7] = max(cov_yy, min_var), [1] = [6] = cov_xy

@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 from config import LOCALIZATION_FREQUENCY, CSV_SAVE_INTERVAL_SECONDS
 from pose import CycleUpdate
+from units import position_from_meters
 from outputs.base import OutputController
 
 CSV_HEADER = (
@@ -22,7 +23,7 @@ class CsvOutputController(OutputController):
     Buffers one row per cycle and appends them to `tdoa3_tag_<id>.csv` in the working directory.
     Rows are flushed when the buffer holds CSV_SAVE_INTERVAL_SECONDS worth of cycles, when
     CSV_SAVE_INTERVAL_SECONDS have passed since the last flush, and on close().
-    Coordinates are left blank for cycles without a pose.
+    Coordinates are in UNITS, rounded to DECIMALS, and left blank for cycles without a pose.
     """
     def __init__(self, tag_id):
         self.filename = f"tdoa3_tag_{tag_id}.csv"
@@ -31,7 +32,7 @@ class CsvOutputController(OutputController):
         self._max_rows = max(1, math.ceil(LOCALIZATION_FREQUENCY * CSV_SAVE_INTERVAL_SECONDS))
 
     def publish(self, update: CycleUpdate) -> None:
-        coordinates = update.pose.position if update.pose is not None else ("", "", "")
+        coordinates = position_from_meters(update.pose.position) if update.pose is not None else ("", "", "")
         self._rows.append((
             datetime.fromtimestamp(update.stamp_ns / 1e9).astimezone().isoformat(timespec="milliseconds"),
             update.n_known_anchors,

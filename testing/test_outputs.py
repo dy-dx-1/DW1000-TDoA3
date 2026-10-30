@@ -57,7 +57,7 @@ class ConsoleOutputControllerTests(unittest.TestCase):
 
         self.assertEqual(out.getvalue().splitlines(), [
             "Sending a processed list of size 5",
-            "[INFO] -----> New position estimated: (1.5, 2.5, 0.5)",
+            "[INFO] -----> New position estimated: (1.5, 2.5, 0.5) m",
             "Sending a processed list of size 1",
             "[INFO] -----> New position estimated: None",
         ])

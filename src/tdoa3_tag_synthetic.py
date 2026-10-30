@@ -11,6 +11,7 @@ ALPHA_HISTORY = 8
 
 from config import ANCHORS
 from pose import TDOA3_Pose, CycleUpdate
+from units import anchors_to_meters
 import solver
 from solver import SPEED_OF_LIGHT
 
@@ -77,7 +78,7 @@ class TDOA3_Tag:
     """
     Synthetic tag, doesn't connect to DW1000 as uses recorded data 
     """
-    def __init__(self, id, bus=0, cs=0): 
+    def __init__(self, id, bus=0, cs=0, anchors=None): 
         #self._dw = DW1000(bus, cs, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
         self.id = id 
 
@@ -87,7 +88,7 @@ class TDOA3_Tag:
 
         # Anchor positions can be pre-defined in config.py to overwrite firmware values. 
         # If a position is not pre-defined, it will be populated with the firmware-defined values published by the anchor in it's messages.
-        self.anchors = dict(ANCHORS) # Copy of the config dict. Format {anchor_id: (x,y,z)}
+        self.anchors = dict(anchors) if anchors is not None else anchors_to_meters(ANCHORS) # Format {anchor_id: (x,y,z)} in meters
         self.TOF_ref_anchors = {}    # Holds theoretical TOF between anchors. Used for outlier detection. {anchor_id: {other_anchor_id:TOF}}
         self.update_ref_TOFs() 
         # Guessing an initial position. Will serve as starting point for subsequent optimization in .run() 
@@ -121,7 +122,6 @@ class TDOA3_Tag:
                 if remote_anchor==anchor or remote_anchor in self.TOF_ref_anchors[anchor]: 
                     continue 
                 else: 
-                    # NOTE TODO currently expecting meters as anchor position, define this properly 
                     tof = int((np.linalg.norm(np.array(remote_pos)-np.array(pos))/SPEED_OF_LIGHT)/DW1000.TIME_UNIT) 
                     self.TOF_ref_anchors[anchor][remote_anchor] = tof 
 
@@ -200,7 +200,7 @@ class TDOA3_Tag:
                     continue
                 else: 
                     print(f"[INFO] Anchor {anchor_id} did not have a position configured in config.py, it's firmware value of {anchor_pos} will be used.")
-                self.anchors[anchor_id] = (anchor_pos[0], anchor_pos[1], anchor_pos[2])
+                self.anchors[anchor_id] = (anchor_pos[0], anchor_pos[1], anchor_pos[2]) # Firmware positions are in meters
                 self.update_ref_TOFs()
             self.history[anchor_id].append( {'seq': seq, 'rx': rx, 'tx': tx_ts, 'remote_data': remote_anchors} )
             self.fresh_anchors.add(anchor_id)

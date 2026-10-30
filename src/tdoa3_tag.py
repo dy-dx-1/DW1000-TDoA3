@@ -9,6 +9,7 @@ from config import (
     OUTPUTS,
 )
 from pose import TDOA3_Pose, CycleUpdate
+from units import anchors_to_meters
 from outputs import make_output_controllers
 import solver
 from solver import SPEED_OF_LIGHT
@@ -83,9 +84,10 @@ class TDOA3_Tag:
     - id: The tag's ID 
     - bus: SPI bus for the DW1000 connection
     - cs:  SPI chip select for the DW1000 connection
+    - anchors: {anchor_id: (x,y,z)} anchor positions in meters. Defaults to config.py ANCHORS converted from UNITS.
     - outputs: Names of the output controllers that receive each cycle's result (see OUTPUTS in config.py)
     """
-    def __init__(self, id, bus=0, cs=0, outputs=OUTPUTS): 
+    def __init__(self, id, bus=0, cs=0, anchors=None, outputs=OUTPUTS): 
         # Built before the radio so an invalid output name doesn't leave the DW1000 open
         self.output_controllers = make_output_controllers(outputs, id)
         self._dw = DW1000(bus, cs, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
@@ -97,7 +99,7 @@ class TDOA3_Tag:
 
         # Anchor positions can be pre-defined in config.py to overwrite firmware values. 
         # If a position is not pre-defined, it will be populated with the firmware-defined values published by the anchor in it's messages.
-        self.anchors = dict(ANCHORS) # Copy of the config dict. Format {anchor_id: (x,y,z)}
+        self.anchors = dict(anchors) if anchors is not None else anchors_to_meters(ANCHORS) # Format {anchor_id: (x,y,z)} in meters
         self.TOF_ref_anchors = {}    # Holds theoretical TOF between anchors. Used for outlier detection. {anchor_id: {other_anchor_id:TOF}}
         self.update_ref_TOFs()       # Computing TOF for all config.py anchors 
         # Guessing an initial position. Will serve as starting point for subsequent optimization in .run() 
@@ -137,7 +139,6 @@ class TDOA3_Tag:
                 if remote_anchor==anchor or remote_anchor in self.TOF_ref_anchors[anchor]: 
                     continue 
                 else: 
-                    # NOTE TODO currently expecting meters as anchor position, define this properly 
                     tof = int((np.linalg.norm(np.array(remote_pos)-np.array(pos))/SPEED_OF_LIGHT)/DW1000.TIME_UNIT) 
                     self.TOF_ref_anchors[anchor][remote_anchor] = tof 
 
@@ -239,7 +240,7 @@ class TDOA3_Tag:
                     continue
                 else: 
                     print(f"[INFO] Anchor {anchor_id} did not have a position configured in config.py, it's firmware value of {anchor_pos} will be used.")
-                self.anchors[anchor_id] = (anchor_pos[0], anchor_pos[1], anchor_pos[2])
+                self.anchors[anchor_id] = (anchor_pos[0], anchor_pos[1], anchor_pos[2]) # Firmware positions are in meters
                 self.update_ref_TOFs()
             self.history[anchor_id].append( {'seq': seq, 'rx': rx, 'tx': tx_ts, 'remote_data': remote_anchors} )
             self.fresh_anchors.add(anchor_id)
