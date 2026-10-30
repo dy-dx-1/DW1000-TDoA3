@@ -26,7 +26,7 @@ def make_update(pose=True):
         n_known_anchors=8,
         n_aggregated=6,
         n_pairs=5 if pose else 1,
-        pose=TDOA3_Pose(stamp_ns=1, x=1.5, y=2.5, z=0.5, n_pairs=5) if pose else None,
+        pose=TDOA3_Pose(x=1.5, y=2.5, z=0.5) if pose else None,
     )
 
 

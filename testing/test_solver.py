@@ -37,10 +37,8 @@ class MultilaterateTests(unittest.TestCase):
 
         self.assertIsInstance(pose, TDOA3_Pose)
         np.testing.assert_allclose(pose.position, true_pos, atol=1e-3)
-        self.assertEqual(pose.n_pairs, len(ANCHORS) - 1)
         self.assertFalse(pose.mode_2d)
         self.assertIsNone(pose.ref_anchor)
-        self.assertGreater(pose.stamp_ns, 0)
 
     def test_covariance_is_nan_until_estimated(self):
         pose = multilaterate(make_tdoa_data((2.5, 3.0, 0.8), ref_id=1), self.initial)

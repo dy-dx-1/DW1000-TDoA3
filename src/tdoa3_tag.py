@@ -162,7 +162,12 @@ class TDOA3_Tag:
         5. Publishing the cycle's CycleUpdate to every output controller
 
         Output controllers are closed (flushing any buffered data) when the context manager exits.
+
+        Poses are stamped with the host wall time at which they are solved, not the time the packets were received.
         """
+        print(f"[INFO] Poses are stamped at solve time and published at the end of each {RECORDING_DURATION*1000:.0f} ms "
+              f"listening window (LOCALIZATION_FREQUENCY = {LOCALIZATION_FREQUENCY} Hz). "
+              f"A pose can describe where the tag was up to ~{RECORDING_DURATION*1000:.0f} ms (plus processing time) before its stamp.")
         while True:
             # Gathering anchor data
             raw_data = []
@@ -176,9 +181,9 @@ class TDOA3_Tag:
             # Using a dict {anchor_id: deque_of_msgs[{rx, tx, remote_data}]}
             aggregated_data = self.aggregate_raw_pkts(raw_data)
             # Processing the data into TDOA-anchor pairs
-            tdoa_anchor_data = self.process_anchor_data(aggregated_data)
+            tdoa_anchor_data, ref_anchor = self.process_anchor_data(aggregated_data)
             # Calculating position
-            pose = self.multilaterate(tdoa_anchor_data)
+            pose = self.multilaterate(tdoa_anchor_data, ref_anchor=ref_anchor)
             update = CycleUpdate(
                 stamp_ns=time.time_ns(),
                 n_known_anchors=len(self.anchors),
@@ -211,7 +216,7 @@ class TDOA3_Tag:
                 print(f"SAVED {len(saver)} ITEMS IN SAVER LIST. {type(saver[0])=}")
                 return 
     
-    def aggregate_raw_pkts(self, data:list[tuple[int, int]])->dict[int, list[dict]]: 
+    def aggregate_raw_pkts(self, data:list[tuple[int, int]])->dict[int, list[dict]]:
         """
         Takes a list of received raw packets [(raw_packet, local_rx_time)] and appends them to the
         per-anchor history (last HISTORY messages, oldest first, gaps allowed).
@@ -240,19 +245,21 @@ class TDOA3_Tag:
             self.fresh_anchors.add(anchor_id)
         return {a: list(h) for a, h in self.history.items()}
 
-    def process_anchor_data(self, aggregated_data: dict[int, list[dict]])->list[tuple]:
+    def process_anchor_data(self, aggregated_data: dict[int, list[dict]])->tuple[list[tuple], int|None]:
         """
         Computes TDOA pairs w.r.t. a single reference anchor. Every anchor with a fresh message is tried
         as reference; the one that yields the most valid pairs is used.
 
-        RETURNS: List of shape [(TDOA, ref_pos, remote_pos), ...]
+        RETURNS:
+        - List of shape [(TDOA, ref_pos, remote_pos), ...]
+        - ID of the reference anchor used, None if no pairs were found
         """
-        best = []
+        best, best_ref = [], None
         for ref_anchor in sorted(self.fresh_anchors):
             results = self._tdoa_from_ref(aggregated_data, ref_anchor)
             if len(results) > len(best):
-                best = results
-        return best
+                best, best_ref = results, ref_anchor
+        return best, best_ref
 
     def _tdoa_from_ref(self, aggregated_data, ref_anchor):
         results = []
@@ -367,12 +374,12 @@ class TDOA3_Tag:
 
         return anchor_id, seq, tx_ts, remote_anchors, anchor_pos  
 
-    def multilaterate(self, tdoa_data:list[tuple])->TDOA3_Pose|None:
+    def multilaterate(self, tdoa_data:list[tuple], ref_anchor:int|None=None)->TDOA3_Pose|None:
         """
         Thin wrapper around solver.multilaterate(). Automatically updates the "position" attribute.\n
         Returns the estimated TDOA3_Pose, or None if no position could be solved.
         """
-        pose = solver.multilaterate(tdoa_data, self.initial)
+        pose = solver.multilaterate(tdoa_data, self.initial, ref_anchor=ref_anchor)
         if pose is not None:
             self.position = pose.position
         return pose

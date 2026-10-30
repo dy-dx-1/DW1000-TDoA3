@@ -1,7 +1,6 @@
 """
 TDoA multilateration solver. Pure module (numpy/scipy only), shared by the real and synthetic tags.
 """
-import time
 import numpy as np
 import scipy.optimize
 from pose import TDOA3_Pose
@@ -10,7 +9,7 @@ SPEED_OF_LIGHT = 299_702_547 # m/s
 MIN_PAIRS = 3
 
 
-def multilaterate(tdoa_data:list[tuple], initial)->TDOA3_Pose|None:
+def multilaterate(tdoa_data:list[tuple], initial, ref_anchor:int|None=None)->TDOA3_Pose|None:
     """
     Use TDoA multilateration to estimate the tag's position.\n
     Returns the estimated TDOA3_Pose, or None if there are too few measurements or the solver failed.\n
@@ -18,6 +17,7 @@ def multilaterate(tdoa_data:list[tuple], initial)->TDOA3_Pose|None:
     - tdoa_data: A list of tuples representing independent measurements (minimum 3)
         - tuple format: (TDOA_measure_seconds, anchor_pos_tuple_1, anchor_pos_tuple_2)
     - initial: (x,y,z) starting point of the optimization
+    - ref_anchor: ID of the reference anchor of the TDOA pairs, copied to the pose
 
     INFO:\n
     Position is estimated through non-linear least squares.
@@ -46,8 +46,7 @@ def multilaterate(tdoa_data:list[tuple], initial)->TDOA3_Pose|None:
         return None
     x, y, z = (float(v) for v in result.x)
     return TDOA3_Pose(
-        stamp_ns=time.time_ns(),
         x=x, y=y, z=z,
-        n_pairs=len(tdoa_data),
+        ref_anchor=ref_anchor,
         mode_2d=False,
     )

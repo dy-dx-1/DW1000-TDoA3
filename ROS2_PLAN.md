@@ -14,7 +14,7 @@
   - `pose0_pose_rejection_threshold: 4.0` (Mahalanobis gate in σ units, so the covariance must be honest)
   - `pose0_differential: false`, `pose0_relative: false` (absolute map coordinates)
   - `two_d_mode: true`, `world_frame: map`, `frequency: 50`, `sensor_timeout: 0.2`, `publish_tf: false`
-  - `smooth_lagged_data` not enabled: late measurements are applied to the current state without rewinding. Keep latency low and stamps accurate.
+  - `smooth_lagged_data` not enabled: late measurements are applied to the current state without rewinding. Keep latency low (see the Step 3 timestamp decision).
 - Assumptions (for now): anchor coordinate frame == `map`; the UWB antenna is at `base_link` (no lever arm, no static TF).
 - Architecture: **loose coupling**. Publish the solved pose with covariance (robot_localization has no TDOA measurement model).
 
@@ -27,7 +27,7 @@
 - Message: `geometry_msgs/msg/PoseWithCovarianceStamped` on `/mobile_manip/sensors/uwb/pose`, frame_id `map`.
 
 ## Order of work
-0 (spike) → 1 (types + solver extraction) → 2 (config + output controllers refactor) → 3 (host timestamps) → 4 (solver features) → 5 (CSV columns) → 6 (ROS 2 output controller) → 7 (synthetic replay) → 8 (integration) → 9 (docs).
+0 (spike) → 1 (types + solver extraction) → 2 (config + output controllers refactor) → 3 (pose timestamps) → 4 (solver features) → 5 (CSV columns) → 6 (ROS 2 output controller) → 7 (synthetic replay) → 8 (integration) → 9 (docs).
 Each step is its own commit; steps 1 and 2 must not change behaviour.
 
 ## Step 0: Environment spike (on the robot computer, throwaway code)
@@ -38,22 +38,22 @@ Each step is its own commit; steps 1 and 2 must not change behaviour.
 - Verify SPI access without root (user in the `spidev` group).
 - Publish a fake constant pose and confirm the EKF is subscribed: `ros2 topic info -v /mobile_manip/sensors/uwb/pose`.
 
-## Step 1: Result types + solver extraction (no behaviour change)
+## ✅ Step 1: Result types + solver extraction (no behaviour change)
 - New `src/pose.py`:
   - `TDOA3_Pose` dataclass:
-    - `stamp_ns: int` (host time, `time.time_ns()` domain)
     - `x, y, z: float`
     - `covariance: np.ndarray` (3x3, m², order x,y,z; in 2D mode the z row/col is 0 and is replaced at output). Until Step 4 fills it: NaN-filled.
-    - `n_pairs: int`, `ref_anchor: int | None`, `mode_2d: bool`
+    - `ref_anchor: int | None`, `mode_2d: bool`
+    - No timestamp or pair count of its own: those of the carrying `CycleUpdate` apply (see Step 3).
   - `CycleUpdate` dataclass (what output controllers get, one per loop iteration):
-    - `stamp_ns: int` (cycle wall time, used by the CSV timestamp column)
+    - `stamp_ns: int` (cycle host wall time, taken right after the solve; used by the CSV timestamp column and as the pose's timestamp)
     - `n_known_anchors: int` (`len(self.anchors)`), `n_aggregated: int` (`len(aggregated_data)`), `n_pairs: int`
     - `pose: TDOA3_Pose | None`
-- New `src/solver.py`: `multilaterate(tdoa_data, initial, cfg) -> TDOA3_Pose | None`, a straight move of today's logic (3D, huber, f_scale 0.7, ≥3 pairs). No `dw1000_spi` import.
+- New `src/solver.py`: `multilaterate(tdoa_data, initial) -> TDOA3_Pose | None` (Step 4 adds the solver config), a straight move of today's logic (3D, huber, f_scale 0.7, ≥3 pairs). No `dw1000_spi` import.
 - `TDOA3_Tag.multilaterate` and the synthetic copy become thin wrappers calling `solver.multilaterate`. Keep `self.position` updated for now.
 - Test: move the existing solver behaviour under a unit test in `testing/test_solver.py` (synthetic geometry, known position recovered).
 
-## Step 2: Config + output controller layer (pure refactor)
+## ✅ Step 2: Config + output controller layer (pure refactor)
 - `src/config.py`:
 ```python
 OUTPUTS = ["console"]          # any of: "console", "csv", "ros2"  (replaces SAVE_TO_CSV)
@@ -76,12 +76,15 @@ src/outputs/
 - `main.py`: `TDOA3_Tag(id=TAG_ID, bus=SPI_BUS, cs=SPI_CS)`, `tag.run()`. Note: CSV file becomes `tdoa3_tag_10.csv` with the current `TAG_ID`.
 - Verify: same CSV header and row format as before on a hardware run (or with a fake radio).
 
-## Step 3: Host timestamps
-- In `run()`, record `host_ns = time.time_ns()` right after each `self._dw.listen()` returns a packet; collect `(pkt, rx, host_ns)`.
-- `aggregate_raw_pkts` accepts both `(pkt, rx)` and `(pkt, rx, host_ns)` tuples (synthetic pickles have no host time → `host_ns=None`). Store `'host_ns'` in each history dict `{seq, rx, tx, remote_data, host_ns}`.
-- `_tdoa_from_ref` / `process_anchor_data` also return the winning reference anchor id and its `cur['host_ns']`. Since only fresh anchors can be the reference, `cur` is always from the current batch.
-- TDOA3_Pose stamp = reference `cur['host_ns']`, or `time.time_ns()` at solve time if it is None.
-- Known limitations (document, don't fix): the pose can be up to ~1 batch (100 ms) old when published, about 5 cm of error at 0.5 m/s with no lag smoothing. Remote messages can be slightly older than `cur`, giving a small motion error per pair.
+## ✅ Step 3: Pose timestamps
+- **Decision: poses are stamped with the host wall time at solve time**, i.e. `CycleUpdate.stamp_ns` (`time.time_ns()` taken in `run()` right after the solve), not with the host time at which the packets were received. `TDOA3_Pose` has no stamp of its own, and `solver.multilaterate` does not read the clock.
+  - The publishing delay is the same either way: a pose is always published at the end of its listening window. Only the stamp differs. With a solve-time stamp, the pose describes where the tag was up to one listening window (`1/LOCALIZATION_FREQUENCY` s) plus processing time before its stamp.
+  - With `smooth_lagged_data` disabled, robot_localization applies late measurements to the current state without rewinding, so an exact (older) receive-time stamp would be fused almost exactly like a solve-time stamp. Receive-time stamping was implemented and then removed, because the extra code bought almost nothing in this setup.
+  - Resulting error: at most `speed × (1/LOCALIZATION_FREQUENCY + processing time)`, about half that on average, typically well below the expected UWB noise.
+  - **Revisit** (stamp with the reference anchor's packet receive time instead) if `smooth_lagged_data` / `history_length` is enabled in the EKF, or if accurate UWB timing relative to the other sensors is needed in bags. That would bring back a `stamp_ns` on `TDOA3_Pose` (the measurement time, distinct from the cycle time).
+- `process_anchor_data` returns `(pairs, ref_anchor)`: the winning reference anchor id, or None when there are no pairs. `run()` passes it to `multilaterate`, which copies it to `TDOA3_Pose.ref_anchor` (for the Step 5 CSV column and debugging). The synthetic copy is handled in Step 7.
+- `run()` prints at startup how far behind its stamp a pose can be, computed from `LOCALIZATION_FREQUENCY`.
+- Known limitation (document, don't fix): remote messages can be slightly older than the reference message, giving a small motion error per pair.
 
 ## Step 4: Solver features (`src/solver.py`)
 - Config:
@@ -109,7 +112,7 @@ SOLVER = {
 - Sanity check against data: `stationary.csv` shows σx ≈ 0.07 m, σy ≈ 0.13 m, σz ≈ 0.27 m (42 fixes, 3D solve). Replay the `.pkl` recordings and check the reported σ is the same order. Then rerun in 2D mode and compare.
 
 ## Step 5: CSV extra columns
-- Append `stamp_ns, ref_anchor, cov_xx, cov_yy, cov_xy` to the CSV row (blank when no pose). Existing columns unchanged and first, so `csv_plotting.py` keeps working.
+- Append `ref_anchor, cov_xx, cov_yy, cov_xy` to the CSV row (blank when no pose). Existing columns unchanged and first, so `csv_plotting.py` keeps working.
 - Header check before appending: if the existing file's header differs from the current one, don't append. Start `tdoa3_tag_<id>_<YYYYmmdd-HHMMSS>.csv` and print a notice.
 
 ## Step 6: `src/outputs/ros2_output.py`
@@ -127,7 +130,7 @@ ROS2 = {
 ```
 - `__init__`: if not `rclpy.ok()`, `rclpy.init(signal_handler_options=SignalHandlerOptions.NO)` so Ctrl-C stays a plain `KeyboardInterrupt` handled by the tag's try/finally. `create_node(node_name)`, `create_publisher(PoseWithCovarianceStamped, topic, queue_depth)` (default reliable QoS). Publish-only, no spin.
 - `publish(update)`: skip if `update.pose` is None or non-finite; count skips and log every `skip_log_every`.
-  - `header.stamp`: `sec = stamp_ns // 1_000_000_000`, `nanosec = stamp_ns % 1_000_000_000` (integer math). use_sim_time is false, so system time matches the other sensors.
+  - `header.stamp` from `update.stamp_ns`: `sec = stamp_ns // 1_000_000_000`, `nanosec = stamp_ns % 1_000_000_000` (integer math). use_sim_time is false, so system time matches the other sensors.
   - `header.frame_id = frame_id`
   - `pose.position = (x, y, z)` (z = antenna height in 2D); `pose.orientation = (0, 0, 0, 1)` (MUST be a valid quaternion).
   - `covariance = build_covariance_array(pose, cfg)`.
@@ -141,7 +144,7 @@ ROS2 = {
 - Tests: `build_covariance_array` indices/floors/PD (no ROS); `make_output_controllers(["console","csv"])` leaves `"rclpy" not in sys.modules`; ROS-only tests behind `unittest.skipUnless(importlib.util.find_spec("rclpy"))`.
 
 ## Step 7: Synthetic replay through the same output controllers
-- `run_synthetic(path, outputs=...)` builds `CycleUpdate`s and uses `make_output_controllers`, so recorded `.pkl` data can be published to the EKF from a laptop (stamp = `time.time_ns()` at solve). Optional `realtime=True` sleeps `RECORDING_DURATION` per batch.
+- `run_synthetic(path, outputs=...)` builds `CycleUpdate`s (its `process_anchor_data` returns `(pairs, ref_anchor)` like the real tag) and uses `make_output_controllers`, so recorded `.pkl` data can be published to the EKF from a laptop (stamped with `CycleUpdate.stamp_ns`, as in Step 3). Optional `realtime=True` sleeps `RECORDING_DURATION` per batch.
 - The mean/median/std summary stays in `run_synthetic` as an analysis printout (computed from the results), not as an output controller.
 - Synthetic and real tag share `solver.py`. Turning the synthetic tag into a subclass of `TDOA3_Tag` (with a lazily created radio) is still optional.
 
@@ -151,5 +154,5 @@ ROS2 = {
 - Run the EKF with the supervisor's YAML + the L-shape bags (T265 + wheel odom) + UWB live or replayed. Inspect `/mobile_manip/odometry/filtered` in RViz2 and `/diagnostics` for pose0 rejections. A high rejection rate means the covariance is too small (raise `tdoa_sigma_m`).
 
 ## Step 9: Docs
-- README "ROS 2 output" section: Jazzy/Ubuntu 24.04, `source /opt/ros/jazzy/setup.bash`, venv with `--system-site-packages`, the NumPy/scipy pins from Step 0, enabling via `OUTPUTS`, topic/message/frame/covariance details, the 2D option, the latency limitation, and the assumptions (anchor frame == map, antenna at base_link).
+- README "ROS 2 output" section: Jazzy/Ubuntu 24.04, `source /opt/ros/jazzy/setup.bash`, venv with `--system-site-packages`, the NumPy/scipy pins from Step 0, enabling via `OUTPUTS`, topic/message/frame/covariance details, the 2D option, the Step 3 timestamp decision (solve-time stamps, the resulting error as a function of `LOCALIZATION_FREQUENCY`, and when to switch to receive-time stamps), and the assumptions (anchor frame == map, antenna at base_link).
 - Update the README's existing CSV section (`OUTPUTS` replaces `SAVE_TO_CSV`, new columns, header-mismatch behaviour) and the "Main localization loop" TODO step 4.
