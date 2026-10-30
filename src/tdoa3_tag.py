@@ -1,18 +1,15 @@
 import struct
 import numpy as np
 import time 
-import csv
-import math
-from datetime import datetime
 from collections import deque, defaultdict
 from dw1000_spi import DW1000
 from config import (
     ANCHORS,
     LOCALIZATION_FREQUENCY,
-    SAVE_TO_CSV,
-    CSV_SAVE_INTERVAL_SECONDS,
+    OUTPUTS,
 )
 from pose import TDOA3_Pose, CycleUpdate
+from outputs import make_output_controllers
 import solver
 from solver import SPEED_OF_LIGHT
 
@@ -86,8 +83,11 @@ class TDOA3_Tag:
     - id: The tag's ID 
     - bus: SPI bus for the DW1000 connection
     - cs:  SPI chip select for the DW1000 connection
+    - outputs: Names of the output controllers that receive each cycle's result (see OUTPUTS in config.py)
     """
-    def __init__(self, id, bus=0, cs=0): 
+    def __init__(self, id, bus=0, cs=0, outputs=OUTPUTS): 
+        # Built before the radio so an invalid output name doesn't leave the DW1000 open
+        self.output_controllers = make_output_controllers(outputs, id)
         self._dw = DW1000(bus, cs, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
         self.id = id 
 
@@ -100,8 +100,6 @@ class TDOA3_Tag:
         self.anchors = dict(ANCHORS) # Copy of the config dict. Format {anchor_id: (x,y,z)}
         self.TOF_ref_anchors = {}    # Holds theoretical TOF between anchors. Used for outlier detection. {anchor_id: {other_anchor_id:TOF}}
         self.update_ref_TOFs()       # Computing TOF for all config.py anchors 
-        self._csv_rows = []
-        self._last_csv_save = time.monotonic()
         # Guessing an initial position. Will serve as starting point for subsequent optimization in .run() 
         if len(self.anchors)>=1: 
             anchor_pos = np.array( [pos_tuple for pos_tuple in self.anchors.values()] )
@@ -116,7 +114,11 @@ class TDOA3_Tag:
         return self 
     def __exit__(self, exc_type, exc_val, exc_tb):
         try:
-            self._save_csv_rows()
+            for controller in self.output_controllers:
+                try:
+                    controller.close()
+                except Exception as e:
+                    print(f"[ERROR] Failed to close output controller {type(controller).__name__}: {e}")
         finally:
             self._dw.close()
 
@@ -148,7 +150,7 @@ class TDOA3_Tag:
         expected_tof = self.TOF_ref_anchors[a1][a2] + ANTENNA_DELAY_TICKS
         return abs(z_tof - expected_tof) <= tolerance_ticks
     
-    def run(self, enable_print:bool): 
+    def run(self): 
         """
         Starts an infinite loop that runs continuous localization of the tag. 
 
@@ -157,75 +159,35 @@ class TDOA3_Tag:
         2. Aggregating raw data into per anchor dict: `{anchor_id: [msg, ..., msg]}` where `msg = {seq, rx, tx, remote_data}`
         3. Computing the most TDOA pairs possible from the aggregated data 
         4. Attempting multilateration with the TDOA pairs 
-        5. Printing/Saving result  
+        5. Publishing the cycle's CycleUpdate to every output controller
 
-        Localization results are buffered and periodically appended to CSV when
-        SAVE_TO_CSV is enabled. Pending rows are flushed when this loop exits.
+        Output controllers are closed (flushing any buffered data) when the context manager exits.
         """
-        try:
-            while True:
-                # Gathering anchor data
-                raw_data = []
-                t1 = time.perf_counter()
-                while (time.perf_counter()-t1)<RECORDING_DURATION:
-                    pkt, rx = self._dw.listen(ranging=True)
-                    if pkt: # rx is None if and only if pkt is None per DW1000 class methods.
-                        # We don't process the pkts yet to ensure we get as much info as possible
-                        raw_data.append((pkt, rx))
-                # Parsing & organizing raw data into an organized format
-                # Using a dict {anchor_id: deque_of_msgs[{rx, tx, remote_data}]}
-                aggregated_data = self.aggregate_raw_pkts(raw_data)
-                # Processing the data into TDOA-anchor pairs
-                tdoa_anchor_data = self.process_anchor_data(aggregated_data)
-                # Calculating position
-                print(f"Sending a processed list of size {len(tdoa_anchor_data)}")
-                pose = self.multilaterate(tdoa_anchor_data)
-                update = CycleUpdate(
-                    stamp_ns=time.time_ns(),
-                    n_known_anchors=len(self.anchors),
-                    n_aggregated=len(aggregated_data),
-                    n_pairs=len(tdoa_anchor_data),
-                    pose=pose,
-                )
-                if enable_print:
-                    print(f"[INFO] -----> New position estimated: {pose.position if pose is not None else None}")
-                if SAVE_TO_CSV:
-                    coordinates = update.pose.position if update.pose is not None else ("", "", "")
-                    self._csv_rows.append((
-                        datetime.fromtimestamp(update.stamp_ns / 1e9).astimezone().isoformat(timespec="milliseconds"),
-                        update.n_known_anchors,
-                        update.n_aggregated,
-                        update.n_pairs,
-                        *coordinates,
-                    ))
-                    if (len(self._csv_rows) >= max(1,math.ceil(LOCALIZATION_FREQUENCY * CSV_SAVE_INTERVAL_SECONDS),)
-                        or time.monotonic() - self._last_csv_save >= CSV_SAVE_INTERVAL_SECONDS
-                    ):
-                        self._save_csv_rows()
-        finally:
-            self._save_csv_rows()
-
-    def _save_csv_rows(self):
-        if not SAVE_TO_CSV or not self._csv_rows:
-            return
-
-        filename = f"tdoa3_tag_{self.id}.csv"
-        with open(filename, "a", newline="", encoding="utf-8") as csv_file:
-            writer = csv.writer(csv_file)
-            csv_file.seek(0, 2)
-            if csv_file.tell() == 0:
-                writer.writerow((
-                    "timestamp",
-                    "known_anchors",
-                    "aggregated_data_size",
-                    "processed_data_pairs",
-                    "position_x",
-                    "position_y",
-                    "position_z",
-                ))
-            writer.writerows(self._csv_rows)
-        self._csv_rows.clear()
-        self._last_csv_save = time.monotonic()
+        while True:
+            # Gathering anchor data
+            raw_data = []
+            t1 = time.perf_counter()
+            while (time.perf_counter()-t1)<RECORDING_DURATION:
+                pkt, rx = self._dw.listen(ranging=True)
+                if pkt: # rx is None if and only if pkt is None per DW1000 class methods.
+                    # We don't process the pkts yet to ensure we get as much info as possible
+                    raw_data.append((pkt, rx))
+            # Parsing & organizing raw data into an organized format
+            # Using a dict {anchor_id: deque_of_msgs[{rx, tx, remote_data}]}
+            aggregated_data = self.aggregate_raw_pkts(raw_data)
+            # Processing the data into TDOA-anchor pairs
+            tdoa_anchor_data = self.process_anchor_data(aggregated_data)
+            # Calculating position
+            pose = self.multilaterate(tdoa_anchor_data)
+            update = CycleUpdate(
+                stamp_ns=time.time_ns(),
+                n_known_anchors=len(self.anchors),
+                n_aggregated=len(aggregated_data),
+                n_pairs=len(tdoa_anchor_data),
+                pose=pose,
+            )
+            for controller in self.output_controllers:
+                controller.publish(update)
 
     def save_runs(self, runs_to_save:int): 
         """

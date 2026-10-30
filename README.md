@@ -15,7 +15,7 @@ This README has the following sections:
 2. Set relevant parameters in `config.py`
 3. Run `main.py`
 
-Localization results can be saved by setting `SAVE_TO_CSV = True` in `config.py`.
+Localization results can be saved by adding `"csv"` to `OUTPUTS` in `config.py`.
 The program appends timestamp, known-anchor count, aggregated-data size,
 processed-pair count, and estimated position coordinates to
 `tdoa3_tag_<id>.csv` in the working directory. Aggregated-data size is the

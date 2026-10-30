@@ -19,15 +19,15 @@
 - Architecture: **loose coupling**. Publish the solved pose with covariance (robot_localization has no TDOA measurement model).
 
 ## Decisions
-- ROS is optional: `rclpy`/`geometry_msgs` are imported **only** inside `src/outputs/ros2_sink.py`, and only if "ros2" is in `OUTPUTS`. rclpy is not in requirements.txt (it comes from apt via `source /opt/ros/jazzy/setup.bash`).
+- ROS is optional: `rclpy`/`geometry_msgs` are imported **only** inside `src/outputs/ros2_output.py`, and only if "ros2" is in `OUTPUTS`. rclpy is not in requirements.txt (it comes from apt via `source /opt/ros/jazzy/setup.bash`).
 - The solver lives in a **pure module** (`src/solver.py`, numpy/scipy only) used by both the real and synthetic tag, so it is testable anywhere and does not drift between the two copies.
-- Sinks receive a per-cycle `CycleUpdate` (counts + optional `TDOA3_Pose`), not a bare `TDOA3_Pose`, so CSV can keep logging cycles with no solution.
+- Output controllers receive a per-cycle `CycleUpdate` (counts + optional `TDOA3_Pose`), not a bare `TDOA3_Pose`, so CSV can keep logging cycles with no solution.
 - 2D solve option: z fixed at a configurable antenna height, solve x,y only.
 - TDOA noise: configurable, default σ = 0.10 m (range-difference std dev), with the shared-reference correlation modelled.
 - Message: `geometry_msgs/msg/PoseWithCovarianceStamped` on `/mobile_manip/sensors/uwb/pose`, frame_id `map`.
 
 ## Order of work
-0 (spike) → 1 (types + solver extraction) → 2 (config + sinks refactor) → 3 (host timestamps) → 4 (solver features) → 5 (CSV columns) → 6 (ROS 2 sink) → 7 (synthetic replay) → 8 (integration) → 9 (docs).
+0 (spike) → 1 (types + solver extraction) → 2 (config + output controllers refactor) → 3 (host timestamps) → 4 (solver features) → 5 (CSV columns) → 6 (ROS 2 output controller) → 7 (synthetic replay) → 8 (integration) → 9 (docs).
 Each step is its own commit; steps 1 and 2 must not change behaviour.
 
 ## Step 0: Environment spike (on the robot computer, throwaway code)
@@ -45,7 +45,7 @@ Each step is its own commit; steps 1 and 2 must not change behaviour.
     - `x, y, z: float`
     - `covariance: np.ndarray` (3x3, m², order x,y,z; in 2D mode the z row/col is 0 and is replaced at output). Until Step 4 fills it: NaN-filled.
     - `n_pairs: int`, `ref_anchor: int | None`, `mode_2d: bool`
-  - `CycleUpdate` dataclass (what sinks get, one per loop iteration):
+  - `CycleUpdate` dataclass (what output controllers get, one per loop iteration):
     - `stamp_ns: int` (cycle wall time, used by the CSV timestamp column)
     - `n_known_anchors: int` (`len(self.anchors)`), `n_aggregated: int` (`len(aggregated_data)`), `n_pairs: int`
     - `pose: TDOA3_Pose | None`
@@ -53,7 +53,7 @@ Each step is its own commit; steps 1 and 2 must not change behaviour.
 - `TDOA3_Tag.multilaterate` and the synthetic copy become thin wrappers calling `solver.multilaterate`. Keep `self.position` updated for now.
 - Test: move the existing solver behaviour under a unit test in `testing/test_solver.py` (synthetic geometry, known position recovered).
 
-## Step 2: Config + output sink layer (pure refactor)
+## Step 2: Config + output controller layer (pure refactor)
 - `src/config.py`:
 ```python
 OUTPUTS = ["console"]          # any of: "console", "csv", "ros2"  (replaces SAVE_TO_CSV)
@@ -63,15 +63,15 @@ CSV_SAVE_INTERVAL_SECONDS = 3600
 - Layout:
 ```
 src/outputs/
-  __init__.py     # make_sinks(outputs, tag_id) -> list[Sink]; lazy import per name; NO ROS imports at module level
-  base.py         # class Sink: publish(result: CycleUpdate) -> None; close() -> None
-  console.py      # current print behaviour (incl. the "Sending a processed list of size N" line)
-  csv_sink.py     # current CSV buffering/flush logic moved out of TDOA3_Tag, identical columns
-  ros2_sink.py    # Step 6
+  __init__.py     # make_output_controllers(outputs, tag_id) -> list[OutputController]; lazy import per name; NO ROS imports at module level
+  base.py         # class OutputController: publish(update: CycleUpdate) -> None; close() -> None
+  console.py      # ConsoleOutputController: current print behaviour (incl. the "Sending a processed list of size N" line)
+  csv_output.py   # CsvOutputController: current CSV buffering/flush logic moved out of TDOA3_Tag, identical columns
+  ros2_output.py  # Step 6
 ```
-- `make_sinks` maps names → modules with `importlib.import_module` inside the function. Unknown name → `ValueError`. For "ros2", an `ImportError` is re-raised as: "ROS 2 output selected but rclpy not importable. Did you `source /opt/ros/jazzy/setup.bash` and create the venv with --system-site-packages?"
-- `CsvSink` keeps today's semantics: one row per cycle, blank coordinates when `pose is None`, file `tdoa3_tag_<id>.csv`, flush on row limit (`ceil(LOCALIZATION_FREQUENCY * CSV_SAVE_INTERVAL_SECONDS)`) or interval, flush on close.
-- `TDOA3_Tag.__init__(id, bus, cs, outputs=OUTPUTS)` builds the sinks. `run()` (no more `enable_print` argument) builds a `CycleUpdate` and calls `s.publish(result)` for each sink. `__exit__` closes every sink (each in its own try/except, errors logged), then the radio in a `finally`.
+- `make_output_controllers` maps names → modules with `importlib.import_module` inside the function. Unknown name → `ValueError`. The "ros2" entry is registered in Step 6, and there an `ImportError` is re-raised as: "ROS 2 output selected but rclpy not importable. Did you `source /opt/ros/jazzy/setup.bash` and create the venv with --system-site-packages?"
+- `CsvOutputController` keeps today's semantics: one row per cycle, blank coordinates when `pose is None`, file `tdoa3_tag_<id>.csv`, flush on row limit (`ceil(LOCALIZATION_FREQUENCY * CSV_SAVE_INTERVAL_SECONDS)`) or interval, flush on close.
+- `TDOA3_Tag.__init__(id, bus, cs, outputs=OUTPUTS)` builds the output controllers. `run()` (no more `enable_print` argument) builds a `CycleUpdate` and calls `controller.publish(update)` for each output controller. `__exit__` closes every output controller (each in its own try/except, errors logged), then the radio in a `finally`.
 - Remove `_csv_rows` / `_save_csv_rows` / `SAVE_TO_CSV` from TDOA3_Tag.
 - `main.py`: `TDOA3_Tag(id=TAG_ID, bus=SPI_BUS, cs=SPI_CS)`, `tag.run()`. Note: CSV file becomes `tdoa3_tag_10.csv` with the current `TAG_ID`.
 - Verify: same CSV header and row format as before on a hardware run (or with a fake radio).
@@ -112,7 +112,7 @@ SOLVER = {
 - Append `stamp_ns, ref_anchor, cov_xx, cov_yy, cov_xy` to the CSV row (blank when no pose). Existing columns unchanged and first, so `csv_plotting.py` keeps working.
 - Header check before appending: if the existing file's header differs from the current one, don't append. Start `tdoa3_tag_<id>_<YYYYmmdd-HHMMSS>.csv` and print a notice.
 
-## Step 6: `src/outputs/ros2_sink.py`
+## Step 6: `src/outputs/ros2_output.py`
 - Config:
 ```python
 ROS2 = {
@@ -126,7 +126,7 @@ ROS2 = {
 }
 ```
 - `__init__`: if not `rclpy.ok()`, `rclpy.init(signal_handler_options=SignalHandlerOptions.NO)` so Ctrl-C stays a plain `KeyboardInterrupt` handled by the tag's try/finally. `create_node(node_name)`, `create_publisher(PoseWithCovarianceStamped, topic, queue_depth)` (default reliable QoS). Publish-only, no spin.
-- `publish(result)`: skip if `result.pose` is None or non-finite; count skips and log every `skip_log_every`.
+- `publish(update)`: skip if `update.pose` is None or non-finite; count skips and log every `skip_log_every`.
   - `header.stamp`: `sec = stamp_ns // 1_000_000_000`, `nanosec = stamp_ns % 1_000_000_000` (integer math). use_sim_time is false, so system time matches the other sensors.
   - `header.frame_id = frame_id`
   - `pose.position = (x, y, z)` (z = antenna height in 2D); `pose.orientation = (0, 0, 0, 1)` (MUST be a valid quaternion).
@@ -138,11 +138,11 @@ ROS2 = {
   - [21], [28], [35] = unused_variance
   - After flooring, keep the matrix PD: clamp |cov_xy| ≤ 0.99·sqrt([0]·[7]) (and the same for xz/yz in 3D).
 - `close()`: `node.destroy_node()`, then `rclpy.shutdown()` only if `rclpy.ok()`. Both wrapped so a failure doesn't block closing the radio.
-- Tests: `build_covariance_array` indices/floors/PD (no ROS); `make_sinks(["console","csv"])` leaves `"rclpy" not in sys.modules`; ROS-only tests behind `unittest.skipUnless(importlib.util.find_spec("rclpy"))`.
+- Tests: `build_covariance_array` indices/floors/PD (no ROS); `make_output_controllers(["console","csv"])` leaves `"rclpy" not in sys.modules`; ROS-only tests behind `unittest.skipUnless(importlib.util.find_spec("rclpy"))`.
 
-## Step 7: Synthetic replay through the same sinks
-- `run_synthetic(path, outputs=...)` builds `CycleUpdate`s and uses `make_sinks`, so recorded `.pkl` data can be published to the EKF from a laptop (stamp = `time.time_ns()` at solve). Optional `realtime=True` sleeps `RECORDING_DURATION` per batch.
-- The mean/median/std summary stays in `run_synthetic` as an analysis printout (computed from the results), not as a sink.
+## Step 7: Synthetic replay through the same output controllers
+- `run_synthetic(path, outputs=...)` builds `CycleUpdate`s and uses `make_output_controllers`, so recorded `.pkl` data can be published to the EKF from a laptop (stamp = `time.time_ns()` at solve). Optional `realtime=True` sleeps `RECORDING_DURATION` per batch.
+- The mean/median/std summary stays in `run_synthetic` as an analysis printout (computed from the results), not as an output controller.
 - Synthetic and real tag share `solver.py`. Turning the synthetic tag into a subclass of `TDOA3_Tag` (with a lazily created radio) is still optional.
 
 ## Step 8: Integration (manual, on the robot)

@@ -4,8 +4,9 @@ Config file for code deployment. Controls:
 - Anchor definition 
 - Localization frequency 
 
-TODO add: 
-- Output control (print/csv/ROS?)
+- Output control
+
+TODO add:
 - Units (mm/m/...) #
 """
 ################################## TAG CONFIGURATION ####################################
@@ -31,5 +32,5 @@ ANCHORS = {1: (4.736, 2.194, 1.213),
 
 ################################## OUTPUT CONTROL ##################################
 LOCALIZATION_FREQUENCY = 10  # Frequency of updates in Hz
-SAVE_TO_CSV = False
+OUTPUTS = ["console"]        # Output controllers to enable, any of: "console", "csv"
 CSV_SAVE_INTERVAL_SECONDS = 3600  # Flush buffered localization rows at most hourly
