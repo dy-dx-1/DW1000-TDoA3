@@ -2,6 +2,7 @@ import contextlib
 import csv
 import io
 import os
+import struct
 import sys
 import tempfile
 import types
@@ -17,6 +18,7 @@ if str(SRC_DIR) not in sys.path:
 from outputs import make_output_controllers
 from outputs.console import ConsoleOutputController
 from outputs.csv_output import CSV_HEADER, CsvOutputController
+from outputs.dynamic import DynamicDisplayController
 from pose import CycleUpdate, TDOA3_Pose
 
 
@@ -37,6 +39,12 @@ class MakeOutputControllersTests(unittest.TestCase):
         self.assertIsInstance(controllers[0], CsvOutputController)
         self.assertIsInstance(controllers[1], ConsoleOutputController)
         self.assertEqual(controllers[0].filename, "tdoa3_tag_3.csv")
+
+    def test_builds_dynamic_controller(self):
+        controller, = make_output_controllers(["dynamic"], tag_id=3)
+
+        self.assertIsInstance(controller, DynamicDisplayController)
+        controller.close()
 
     def test_unknown_output_raises(self):
         with self.assertRaises(ValueError):
@@ -61,6 +69,32 @@ class ConsoleOutputControllerTests(unittest.TestCase):
             "Sending a processed list of size 1",
             "[INFO] -----> New position estimated: None",
         ])
+
+
+class DynamicDisplayControllerTests(unittest.TestCase):
+    @patch("outputs.dynamic.socket.socket")
+    def test_sends_id_and_position_as_little_endian_packet(self, make_socket):
+        udp_socket = make_socket.return_value
+        controller = DynamicDisplayController(7)
+        update = make_update()
+
+        controller.publish(update)
+
+        args, _ = udp_socket.sendto.call_args
+        self.assertEqual(args[0], struct.pack("<ifff", 7, 1.5, 2.5, 0.5))
+        self.assertEqual(args[1], ("127.0.0.1", 5005))
+        udp_socket.close.assert_not_called()
+        controller.close()
+        udp_socket.close.assert_called_once()
+
+    @patch("outputs.dynamic.socket.socket")
+    def test_does_not_send_when_position_is_missing(self, make_socket):
+        controller = DynamicDisplayController(7)
+
+        controller.publish(make_update(pose=False))
+
+        make_socket.return_value.sendto.assert_not_called()
+        controller.close()
 
 
 class CsvOutputControllerTests(unittest.TestCase):
