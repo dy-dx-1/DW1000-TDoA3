@@ -34,5 +34,5 @@ DECIMALS = 3    # Output coordinates are rounded to this number of decimals (in 
 
 ################################## OUTPUT CONTROL ##################################
 LOCALIZATION_FREQUENCY = 10  # Frequency of updates in Hz
-OUTPUTS = ["console"]        # Output controllers to enable, any of: "console", "csv"
+OUTPUTS = ["console", "dynamic"]  # Output controllers to enable, any of: "console", "csv", "dynamic"
 CSV_SAVE_INTERVAL_SECONDS = 3600  # Flush buffered localization rows at most hourly

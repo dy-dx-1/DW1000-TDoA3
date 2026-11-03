@@ -10,6 +10,7 @@ from outputs.base import OutputController
 _CONTROLLERS = {
     "console": ("outputs.console", "ConsoleOutputController"),
     "csv":     ("outputs.csv_output", "CsvOutputController"),
+    "dynamic": ("outputs.dynamic", "DynamicDisplayController"),
 }
 
 
