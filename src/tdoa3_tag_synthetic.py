@@ -9,9 +9,10 @@ MAX_ALPHA_ERROR_PPM = 150
 MAX_ALPHA_MEDIAN_DEVIATION_PPM = 10
 ALPHA_HISTORY = 8
 
-from config import ANCHORS
+from config import ANCHORS, OUTPUTS
 from pose import TDOA3_Pose, CycleUpdate
 from units import anchors_to_meters
+from outputs import make_output_controllers
 import solver
 from solver import SPEED_OF_LIGHT
 
@@ -78,8 +79,10 @@ class TDOA3_Tag:
     """
     Synthetic tag, doesn't connect to DW1000 as uses recorded data 
     """
-    def __init__(self, id, bus=0, cs=0, anchors=None): 
+    def __init__(self, id, bus=0, cs=0, anchors=None, outputs=OUTPUTS):
         #self._dw = DW1000(bus, cs, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
+        self.output_names = tuple(outputs)
+        self.output_controllers = make_output_controllers(self.output_names, id)
         self.id = id 
 
         self.history = defaultdict(lambda: deque(maxlen=HISTORY))   # anchor_id -> msgs, oldest first
@@ -104,8 +107,11 @@ class TDOA3_Tag:
     def __enter__(self):
         return self 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        #self._dw.close() 
-        pass 
+        for controller in self.output_controllers:
+            try:
+                controller.close()
+            except Exception as e:
+                print(f"[ERROR] Failed to close output controller {type(controller).__name__}: {e}")
 
     def update_ref_TOFs(self): 
         """
@@ -166,7 +172,9 @@ class TDOA3_Tag:
                 n_pairs=len(tdoa_anchor_data),
                 pose=pose,
             )
-            if enable_print:
+            for controller in self.output_controllers:
+                controller.publish(update)
+            if enable_print and "console" not in self.output_names:
                 position = None
                 if update.pose is not None:
                     position = tuple(round(i*100) for i in update.pose.position)
