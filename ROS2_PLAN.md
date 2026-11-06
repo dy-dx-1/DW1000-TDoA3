@@ -3,10 +3,10 @@
 ## Context
 - Repo: DW1000-TDoA3. A Python TDoA3 tag on a DW1000, listening to Bitcraze LPS anchors.
   - `src/tdoa3_tag.py`: `TDOA3_Tag.run()` loops: listen for 1/LOCALIZATION_FREQUENCY s → `aggregate_raw_pkts` → `process_anchor_data` → `multilaterate` → print/CSV (inline in run()).
-    - Imports `dw1000_spi` (needs spidev) at module level, so it cannot be imported on a laptop/Windows. This is why the synthetic copy is used instead.
+    - Imported `dw1000_spi` (needs spidev) at module level, so it could not be imported on a laptop/Windows (fixed in Step 7).
   - `src/config.py`: plain constants (has a TODO for output control).
   - `src/main.py`: entry point. Ignores TAG_ID/SPI_BUS/SPI_CS from config (hard-codes id=1).
-  - `src/tdoa3_tag_synthetic.py`: near-copy of the class that replays `.pkl` recordings (`run_synthetic`). Pickles hold `[(pkt, rx), ...]` per batch, no host times.
+  - `src/tdoa3_tag_synthetic.py`: was a near-copy of the class that replays `.pkl` recordings (`run_synthetic`); now a subclass of the real tag (Step 7). Pickles hold `[(pkt, rx), ...]` per batch, no host times.
   - `stationary.csv` (older format, no `aggregated_data_size` column, ~1 Hz), `straight_line.csv` (~7.6 Hz), `csv_plotting.py` (reads `position_x/y/z` only).
 - Target: ROS 2 **Jazzy** on **Ubuntu 24.04** (system Python 3.12). The driver runs on the robot computer.
 - Consumer: the team's standard `robot_localization` `ekf_node` (`/mobile_manip/ekf_filter_node`):
@@ -20,7 +20,7 @@
 
 ## Decisions
 - ROS is optional: `rclpy`/`geometry_msgs` are imported **only** inside `src/outputs/ros2_output.py`, and only if "ros2" is in `OUTPUTS`. rclpy is not in requirements.txt (it comes from apt via `source /opt/ros/jazzy/setup.bash`).
-- The solver lives in a **pure module** (`src/solver.py`, numpy/scipy only) used by both the real and synthetic tag, and it does not drift between the two copies.
+- The solver lives in a **pure module** (`src/solver.py`, numpy/scipy only) called by the tag. Since Step 7 the synthetic tag is a subclass of the real one, so all processing exists once.
 - Output controllers receive a per-cycle `CycleUpdate` (counts + optional `TDOA3_Pose`), not a bare `TDOA3_Pose`, so CSV can keep logging cycles with no solution.
 - 2D solve option: z fixed at a configurable antenna height, solve x,y only.
 - TDOA noise: configurable, default σ = 0.10 m (range-difference std dev), with the shared-reference correlation modelled.
@@ -151,10 +151,18 @@ ROS2 = {
 - `close()`: `node.destroy_node()`, then `rclpy.shutdown()` (in a `finally`) only if this controller initialised rclpy and it is still ok.
 - Checked on Windows against stand-in rclpy/geometry_msgs modules (stamp, frame, position, quaternion, covariance layout, pause/resume prints, shutdown). Not yet run against a real ROS 2 install (Step 0 / Step 8).
 
-## Step 7: Synthetic replay through the same output controllers
-- `run_synthetic(path, outputs=...)` builds `CycleUpdate`s (its `process_anchor_data` returns `(pairs, ref_anchor)` like the real tag) and uses `make_output_controllers`, so recorded `.pkl` data can be published to the EKF from a laptop (stamped with `CycleUpdate.stamp_ns`, as in Step 3). Optional `realtime=True` sleeps `RECORDING_DURATION` per batch.
-- The mean/median/std summary stays in `run_synthetic` as an analysis printout (computed from the results), not as an output controller.
-- Synthetic and real tag share `solver.py`. Turning the synthetic tag into a subclass of `TDOA3_Tag` (with a lazily created radio) is still optional.
+## ✅ Step 7: Synthetic replay through the real tag
+- **The synthetic tag is a subclass of `TDOA3_Tag`** that only replaces the listening step, so replays run exactly the real tag's code and can't drift from it (the old copy already had: it never returned `ref_anchor`).
+- `tdoa3_tag.py` changes (pure refactor):
+  - `run()` keeps its stages inline (listen → aggregate → process → optimize → publish). Listening is `raw_data = self.listen()`; the loop returns when `listen()` gives None (only a synthetic tag runs out of data).
+  - `listen()`: the listening loop moved out of `run()` unchanged (one `RECORDING_DURATION` window). `save_runs()` uses it too.
+  - `_open_radio(bus, cs)` opens the DW1000 and imports `dw1000_spi` inside it, so the module imports without spidev. `__exit__` closes the radio only if there is one.
+  - `DW1000_TIME_UNIT = 1 / RADIO_TICK_FREQUENCY` replaces `DW1000.TIME_UNIT` (same value, 1.5650040064102565e-11 s).
+- `tdoa3_tag_synthetic.py`: `SyntheticTag(path, realtime_period_s=None, **tag_kwargs)`. Loads the `.pkl` batches, opens no radio, and `listen()` returns the next batch. `realtime_period_s` waits before each batch to replay at the recording's pace (the pickles don't store their window length, so it is not taken from `RECORDING_DURATION`).
+  - Usage: `with SyntheticTag("60_1s_raw_datas.pkl", id=TAG_ID) as tag: tag.run()`. Any `OUTPUTS` work, so recordings can be published to the EKF from a laptop (stamped with `CycleUpdate.stamp_ns`, as in Step 3).
+- The old `run_synthetic` mean/median/std printout is gone; the CSV output gives the same data.
+- `main.py` and `testing/calibrate_tdoa_sigma.py` use `SyntheticTag`.
+- Verified: both `.pkl` recordings give the same pair counts, positions and covariances as the old synthetic copy, cycle by cycle, and `dw1000_spi` is not imported. The radio side of `listen()` / `save_runs()` is not yet run on hardware.
 
 ## Step 8: Integration (manual, on the robot)
 - `ros2 topic hz /mobile_manip/sensors/uwb/pose` (expect ≈ LOCALIZATION_FREQUENCY minus skipped cycles), `ros2 topic echo ...` (check stamp, frame, covariance).
@@ -173,4 +181,4 @@ ROS2 = {
   - What it is: the RMS disagreement between the TDOA pairs at the solved position, in meters. High values mean no single position explains all pairs (outlier pair, NLOS, wrong solution).
   - How to set it: replay or record a run, look at the typical RMS (logged/printed), and set the threshold a few times above it (roughly 3–5× `TDOA_SIGMA_M`). Too low drops good poses; leave it `None` when publishing to the EKF only, since bad cycles already get an inflated covariance there.
   - That enabling it requires at least 4 pairs per cycle, so fewer poses come out in sparse anchor coverage.
-- Update the README's existing CSV section (`OUTPUTS` replaces `SAVE_TO_CSV`, new columns, header-mismatch behaviour) and the "Main localization loop" TODO step 4.
+- Update the README's existing CSV section (`OUTPUTS` replaces `SAVE_TO_CSV`, new columns, a new `tag_<id>_<n>.csv` file when one exists) and the "Main localization loop" TODO step 4.
