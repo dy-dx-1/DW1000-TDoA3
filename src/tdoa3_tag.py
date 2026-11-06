@@ -2,7 +2,6 @@ import struct
 import numpy as np
 import time 
 from collections import deque, defaultdict
-from dw1000_spi import DW1000
 from config import (
     ANCHORS,
     LOCALIZATION_FREQUENCY,
@@ -27,6 +26,7 @@ ALPHA_HISTORY = 8                   # How many alphas we keep in the history for
 ANTENNA_OFFSET_M = 154.6
 RADIO_TICK_FREQUENCY = 499.2e6 * 128
 ANTENNA_DELAY_TICKS = ANTENNA_OFFSET_M * RADIO_TICK_FREQUENCY / 299_792_458.0
+DW1000_TIME_UNIT = 1 / RADIO_TICK_FREQUENCY # seconds per DW1000 clock tick (same as dw1000_spi's DW1000.TIME_UNIT)
 
 def wrap_diff(a, b, bits:int, signed:bool=True):
     """
@@ -91,7 +91,7 @@ class TDOA3_Tag:
     def __init__(self, id, bus=0, cs=0, anchors=None, outputs=OUTPUTS): 
         # Built before the radio so an invalid output name doesn't leave the DW1000 open
         self.output_controllers = make_output_controllers(outputs, id)
-        self._dw = DW1000(bus, cs, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
+        self._dw = self._open_radio(bus, cs)
         self.id = id 
 
         self.history = defaultdict(lambda: deque(maxlen=HISTORY))   # anchor_id -> msgs, oldest first
@@ -124,7 +124,13 @@ class TDOA3_Tag:
                 except Exception as e:
                     print(f"[ERROR] Failed to close output controller {type(controller).__name__}: {e}")
         finally:
-            self._dw.close()
+            if self._dw is not None:
+                self._dw.close()
+
+    def _open_radio(self, bus, cs):
+        """Opens the DW1000. Imported here so the module (and its computations) can be used without spidev."""
+        from dw1000_spi import DW1000
+        return DW1000(bus, cs, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
 
     def update_ref_TOFs(self): 
         """
@@ -141,7 +147,7 @@ class TDOA3_Tag:
                 if remote_anchor==anchor or remote_anchor in self.TOF_ref_anchors[anchor]: 
                     continue 
                 else: 
-                    tof = int((np.linalg.norm(np.array(remote_pos)-np.array(pos))/SPEED_OF_LIGHT)/DW1000.TIME_UNIT) 
+                    tof = int((np.linalg.norm(np.array(remote_pos)-np.array(pos))/SPEED_OF_LIGHT)/DW1000_TIME_UNIT) 
                     self.TOF_ref_anchors[anchor][remote_anchor] = tof 
 
     def validate_measured_TOF(self, a1:int, a2:int, z_tof:int)->bool: 
@@ -149,7 +155,7 @@ class TDOA3_Tag:
         Compares the reported TOF, including the firmware antenna delay, with the geometric anchor-to-anchor TOF.
         """
         tolerance_m = 0.3
-        tolerance_ticks = tolerance_m / (SPEED_OF_LIGHT * DW1000.TIME_UNIT)
+        tolerance_ticks = tolerance_m / (SPEED_OF_LIGHT * DW1000_TIME_UNIT)
         expected_tof = self.TOF_ref_anchors[a1][a2] + ANTENNA_DELAY_TICKS
         return abs(z_tof - expected_tof) <= tolerance_ticks
     
@@ -164,6 +170,7 @@ class TDOA3_Tag:
         4. Attempting multilateration with the TDOA pairs 
         5. Publishing the cycle's CycleUpdate to every output controller
 
+        The loop ends when listen() returns None (only a synthetic tag runs out of data).
         Output controllers are closed (flushing any buffered data) when the context manager exits.
 
         Poses are stamped with the host wall time at which they are solved, not the time the packets were received.
@@ -173,13 +180,9 @@ class TDOA3_Tag:
               f"A pose can describe where the tag was up to ~{RECORDING_DURATION*1000:.0f} ms (plus processing time) before its stamp.")
         while True:
             # Gathering anchor data
-            raw_data = []
-            t1 = time.perf_counter()
-            while (time.perf_counter()-t1)<RECORDING_DURATION:
-                pkt, rx = self._dw.listen(ranging=True)
-                if pkt: # rx is None if and only if pkt is None per DW1000 class methods.
-                    # We don't process the pkts yet to ensure we get as much info as possible
-                    raw_data.append((pkt, rx))
+            raw_data = self.listen()
+            if raw_data is None:
+                return # only synthetic tag returns None when it's out of data 
             # Parsing & organizing raw data into an organized format
             # Using a dict {anchor_id: deque_of_msgs[{rx, tx, remote_data}]}
             aggregated_data = self.aggregate_raw_pkts(raw_data)
@@ -194,8 +197,23 @@ class TDOA3_Tag:
                 n_pairs=len(tdoa_anchor_data),
                 pose=pose,
             )
+            # Publishing
             for controller in self.output_controllers:
                 controller.publish(update)
+
+    def listen(self)->list[tuple]|None:
+        """
+        Gathers raw packets from the anchors for RECORDING_DURATION seconds.
+        RETURNS: [(raw_packet, local_rx_time), ...]. Never None for the real tag (a synthetic tag returns None when out of data).
+        """
+        raw_data = []
+        t1 = time.perf_counter()
+        while (time.perf_counter()-t1)<RECORDING_DURATION:
+            pkt, rx = self._dw.listen(ranging=True)
+            if pkt: # rx is None if and only if pkt is None per DW1000 class methods.
+                # We don't process the pkts yet to ensure we get as much info as possible
+                raw_data.append((pkt, rx))
+        return raw_data
 
     def save_runs(self, runs_to_save:int): 
         """
@@ -203,18 +221,10 @@ class TDOA3_Tag:
         """
         saver = [] # list of lists of raw data to save
         while True: 
-            # Gathering anchor data 
-            raw_data = [] 
-            t1 = time.perf_counter() 
-            while (time.perf_counter()-t1)<RECORDING_DURATION: 
-                pkt, rx = self._dw.listen(ranging=True) 
-                if pkt: # rx is None if and only if pkt is None per DW1000 class methods.
-                    # We don't process the pkts yet to ensure we get as much info as possible 
-                    raw_data.append((pkt, rx))
-            saver.append(raw_data)
+            saver.append(self.listen())
             if len(saver)==runs_to_save: 
                 import pickle 
-                with open(f"{runs_to_save}_1s_raw_datas.pkl", "wb") as file:
+                with open(f"{runs_to_save}_{RECORDING_DURATION}_raw_datas.pkl", "wb") as file:
                     pickle.dump(saver, file)
                 print(f"SAVED {len(saver)} ITEMS IN SAVER LIST. {type(saver[0])=}")
                 return 
@@ -316,7 +326,7 @@ class TDOA3_Tag:
             tdoa_ticks = delta_rx - alpha * delta_tx
             if abs(tdoa_ticks) > self.TOF_ref_anchors[ref_anchor][remote_anchor]:
                 continue
-            TDoA = tdoa_ticks * DW1000.TIME_UNIT
+            TDoA = tdoa_ticks * DW1000_TIME_UNIT
             results.append((TDoA, self.anchors[ref_anchor], self.anchors[remote_anchor]))
         return results
 

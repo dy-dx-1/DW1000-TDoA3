@@ -52,27 +52,22 @@ def record(duration_s:float)->list[list[tuple]]:
         print(f"[INFO] Recording for {duration_s:.0f} s, keep the tag still...")
         end = time.perf_counter() + duration_s
         while time.perf_counter() < end:
-            raw_data = []
-            t1 = time.perf_counter()
-            while (time.perf_counter()-t1) < tdoa3_tag.RECORDING_DURATION:
-                pkt, rx = tag._dw.listen(ranging=True)
-                if pkt:
-                    raw_data.append((pkt, rx))
-            batches.append(raw_data)
+            batches.append(tag.listen())
             print(f"\r[INFO] {len(batches)} batches, {sum(len(b) for b in batches)} packets", end="")
     print()
     return batches
 
 
-def extract_cycles(batches:list[list[tuple]]):
-    """Runs the recorded batches through the tag's aggregation and processing. Returns (anchors, [pairs per cycle])."""
-    # The synthetic tag has the same processing as the real one, without needing the radio
-    from tdoa3_tag_synthetic import TDOA3_Tag
-    tag = TDOA3_Tag(1, outputs=[])
+def extract_cycles(path:str):
+    """Runs a recording through the tag's aggregation and processing. Returns (anchors, [pairs per cycle])."""
+    # The synthetic tag runs the real tag's processing on recorded data, without needing the radio
+    from tdoa3_tag_synthetic import SyntheticTag
     cycles = []
     with contextlib.redirect_stdout(io.StringIO()):
-        for raw_data in batches:
-            cycles.append(tag.process_anchor_data(tag.aggregate_raw_pkts(raw_data)))
+        with SyntheticTag(path, id=1, outputs=[]) as tag:
+            while (raw_data := tag.listen()) is not None:
+                pairs, _ = tag.process_anchor_data(tag.aggregate_raw_pkts(raw_data))
+                cycles.append(pairs)
     return tag.anchors, cycles
 
 
@@ -100,8 +95,8 @@ def residual_s2(pairs:list[tuple], pose, n_unknowns:int)->float:
     return r @ np.linalg.solve(correlation, r) / (m - n_unknowns)
 
 
-def analyse(batches:list[list[tuple]], true_position:list[float]|None):
-    anchors, cycles = extract_cycles(batches)
+def analyse(path:str, true_position:list[float]|None):
+    anchors, cycles = extract_cycles(path)
     anchor_ids = {tuple(pos): anchor_id for anchor_id, pos in anchors.items()}
     n_unknowns = 2 if SOLVER["mode_2d"] else 3
     print(f"\n[INFO] {len(cycles)} cycles, {sum(len(c) for c in cycles)} TDOA pairs, "
@@ -206,16 +201,14 @@ def main():
                         help="Surveyed tag position in meters, in the anchor frame")
     args = parser.parse_args()
 
-    if args.pkl:
-        with open(args.pkl, "rb") as file:
-            batches = pickle.load(file)
-    else:
+    path = args.pkl
+    if path is None:
         batches = record(args.duration)
         path = f"calibration_{datetime.now():%Y%m%d-%H%M%S}.pkl"
         with open(path, "wb") as file:
             pickle.dump(batches, file)
         print(f"[INFO] Recording saved to {path} (re-analyse it with --pkl)")
-    analyse(batches, args.true_position)
+    analyse(path, args.true_position)
 
 
 if __name__ == "__main__":

@@ -6,9 +6,9 @@ def main():
 
    # with TDOA3_Tag(id=TAG_ID, bus=SPI_BUS, cs=SPI_CS, anchors=anchors_to_meters(ANCHORS)) as tag:
    #     tag.run()
-   from tdoa3_tag_synthetic import TDOA3_Tag
-   with TDOA3_Tag(id=TAG_ID, bus=SPI_BUS, cs=SPI_CS, anchors=anchors_to_meters(ANCHORS)) as tag:
-        tag.run_synthetic(path = "60_1s_raw_datas.pkl", enable_print=False) 
+   from tdoa3_tag_synthetic import SyntheticTag
+   with SyntheticTag("60_1s_raw_datas.pkl", id=TAG_ID, anchors=anchors_to_meters(ANCHORS)) as tag:
+        tag.run()
 
 if __name__ == "__main__":
     main()
