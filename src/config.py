@@ -30,6 +30,15 @@ ANCHORS = {1: (4.736, 2.194, 1.213),
 UNITS    = "m"  # Any of: "m", "cm", "mm"
 DECIMALS = 3    # Output coordinates are rounded to this number of decimals (in UNITS), 0 for whole numbers
 
+################################## SOLVER CONFIGURATION ##################################
+SOLVER = {
+    "mode_2d": False,            # Solve x,y only, with z fixed at antenna_height_m. More stable when the tag's height is known
+    "antenna_height_m": 0.0,     # Height of the tag's antenna, in meters (regardless of UNITS). Only used when mode_2d is True
+    "warm_start": False,         # Start each solve from the last pose instead of the anchor centroid
+    "max_residual_rms_m": None,  # Reject poses whose TDOA pairs disagree by more than this RMS, in meters. None = disabled
+                                 # When enabled, at least 4 TDOA pairs are needed per pose (see README)
+}
+
 ################################## OUTPUT CONTROL ##################################
 LOCALIZATION_FREQUENCY = 1  # Frequency of updates in Hz
 OUTPUTS = ["console", "dynamic"]  # Output controllers to enable, any of: "console", "csv", "dynamic"

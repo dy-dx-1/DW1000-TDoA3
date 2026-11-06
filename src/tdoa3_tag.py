@@ -7,6 +7,7 @@ from config import (
     ANCHORS,
     LOCALIZATION_FREQUENCY,
     OUTPUTS,
+    SOLVER,
 )
 from pose import TDOA3_Pose, CycleUpdate
 from units import anchors_to_meters
@@ -102,6 +103,7 @@ class TDOA3_Tag:
         self.anchors = dict(anchors) if anchors is not None else anchors_to_meters(ANCHORS) # Format {anchor_id: (x,y,z)} in meters
         self.TOF_ref_anchors = {}    # Holds theoretical TOF between anchors. Used for outlier detection. {anchor_id: {other_anchor_id:TOF}}
         self.update_ref_TOFs()       # Computing TOF for all config.py anchors 
+        self.position = None         # Last solved (x,y,z), used as the warm start
         # Guessing an initial position. Will serve as starting point for subsequent optimization in .run() 
         if len(self.anchors)>=1: 
             anchor_pos = np.array( [pos_tuple for pos_tuple in self.anchors.values()] )
@@ -380,7 +382,11 @@ class TDOA3_Tag:
         Thin wrapper around solver.multilaterate(). Automatically updates the "position" attribute.\n
         Returns the estimated TDOA3_Pose, or None if no position could be solved.
         """
-        pose = solver.multilaterate(tdoa_data, self.initial, ref_anchor=ref_anchor)
+        # Warm start: start from the last pose if enabled and there is one, otherwise from the anchor centroid
+        start = self.position if SOLVER["warm_start"] and self.position is not None else self.initial
+        pose = solver.multilaterate(tdoa_data, start, ref_anchor=ref_anchor, mode_2d=SOLVER["mode_2d"],
+                                    antenna_height_m=SOLVER["antenna_height_m"],
+                                    max_residual_rms_m=SOLVER["max_residual_rms_m"])
         if pose is not None:
             self.position = pose.position
         return pose

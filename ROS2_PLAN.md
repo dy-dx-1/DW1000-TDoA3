@@ -92,24 +92,33 @@ src/outputs/
 SOLVER = {
     "mode_2d": False,
     "antenna_height_m": 0.0,      # z used when mode_2d is True
-    "tdoa_sigma_m": 0.10,         # range-difference std dev per pair
-    "correlated_pairs": True,     # model the shared-reference correlation
-    "min_pairs": 3,
-    "warm_start_timeout_s": 1.0,
-    "max_cost": None,             # optional gate, None = disabled
-    "max_condition": 1e8,         # reject ill-conditioned geometry
+    "warm_start": False,          # start each solve from the last pose instead of the anchor centroid
+    "max_residual_rms_m": None,   # reject poses whose pairs disagree by more than this (m), None = disabled
 }
 ```
 - **2D mode**: optimise [x, y] only; the residual function builds p = (x, y, antenna_height_m). Unknowns n = 2 (3D: n = 3).
-- **Gates** (return None): `len(tdoa_data) < max(min_pairs, n)`, solver failure, any NaN/inf in x or covariance, `cost > max_cost` when set, condition number above `max_condition`.
-- **Covariance** at the solution `p̂` with m pairs:
-  - Recompute the plain (not huber-scaled) Jacobian analytically: row i = (p-a_ref)/|p-a_ref| − (p-a_i)/|p-a_i| (only the x,y columns in 2D). `result.jac` is loss-scaled, so don't use it.
-  - Measurement correlation: every pair shares the reference anchor's rx timestamp. With `correlated_pairs`, use the normalised correlation matrix `C = (I + 11ᵀ)/2` (diagonal 1, off-diagonal ½), with `C⁻¹ = 2(I − 11ᵀ/(m+1))`; otherwise `C = I`. This is an approximation (TDoA3 also adds noise from the remote tx estimate), hence the flag.
-  - Scale: `s² = rᵀ C⁻¹ r / (m − n)` when m > n, else 0; `σ² = max(tdoa_sigma_m², s²)`.
-  - `cov = σ² · (Jᵀ C⁻¹ J)⁻¹`. Check `cond(Jᵀ C⁻¹ J)` before inverting. Symmetrise `(cov + covᵀ)/2`.
-- **Warm start**: the solver gets `initial` from the tag; the tag keeps `(last_good_xyz, last_good_monotonic)` and passes it if younger than `warm_start_timeout_s`, otherwise the anchor centroid (z = antenna height in 2D). Only successful solves update it.
-- Unit tests (`testing/test_solver.py`, no hardware or ROS): 2D vs 3D recovery on synthetic geometry with noise; covariance shape/symmetry/PD; covariance grows outside the anchor hull; correlated vs uncorrelated model; gates (too few pairs, NaN, ill-conditioned collinear anchors); warm-start timeout logic.
-- Sanity check against data: `stationary.csv` shows σx ≈ 0.07 m, σy ≈ 0.13 m, σz ≈ 0.27 m (42 fixes, 3D solve). Replay the `.pkl` recordings and check the reported σ is the same order. Then rerun in 2D mode and compare.
+- **Gates** (return None):
+  - `len(tdoa_data) < MIN_PAIRS` (hard-coded in `solver.py`, not configurable): 3 normally, raised to `MIN_PAIRS_RMS_GATE = 4` when `max_residual_rms_m` is set (see below).
+  - Solver failure, any NaN/inf in x or covariance, or `JᵀJ` not invertible (`LinAlgError`). There is no condition-number setting.
+  - `max_residual_rms_m` when set (see below).
+- **`max_residual_rms_m`** (optional, the only quality setting exposed to the user):
+  - Quantity: `rms = sqrt(Σ rᵢ² / (m − n))`, computed from the plain residuals (not huber-weighted) at the solution, in meters. It is the per-pair disagreement this cycle, directly comparable to `TDOA_SIGMA_M`.
+  - Reject the pose when `rms > max_residual_rms_m`.
+  - Needs redundant pairs: with m = n the solve fits every pair exactly and the RMS is meaningless (division by zero). Hence the higher `MIN_PAIRS_RMS_GATE = 4` when the gate is on, so 3D always has ≥ 1 and 2D ≥ 2 redundant pairs. Cycles with only 3 pairs are dropped while it is enabled.
+  - README explains what it is and how to set it (Step 9).
+- **Covariance**: computed automatically every cycle at the solution `p̂` with m pairs. The noise model is **hard-coded in `solver.py`, not configurable**: the user gets a pose and a covariance without having to model uncertainty.
+  - Module constants (not in `config.py`):
+    - `TDOA_SIGMA_M`: std dev of one pair's range difference, in meters. Calibrated once by us (see below), starting value 0.10.
+    - `PAIR_CORRELATION = 0.5`: every pair reuses the reference anchor's packet (its rx timestamp is in every pair), so any two pairs share half their noise when the tag's timestamp noise dominates.
+  - 1. **Geometry**: recompute the plain (not huber-scaled) Jacobian analytically: row i = (p-a_ref)/|p-a_ref| − (p-a_i)/|p-a_i| (only the x,y columns in 2D). `result.jac` is loss-scaled, so don't use it.
+  - 2. **Pair noise**: `R = σ² · C`, with `C = (1 − ρ)·I + ρ·11ᵀ` (diagonal 1, off-diagonal ρ = ½), σ = `TDOA_SIGMA_M`.
+  - 3. **Position noise**: the solve is unweighted least squares, so use the matching sandwich formula `cov = (JᵀJ)⁻¹ · Jᵀ R J · (JᵀJ)⁻¹`. Don't whiten the solve to use the simpler `(JᵀR⁻¹J)⁻¹`: whitening mixes pairs, so one bad pair leaks into all of them and huber can no longer isolate it. If `JᵀJ` can't be inverted, reject the pose. Symmetrise `(cov + covᵀ)/2`.
+  - 4. **Bad-cycle inflation**: when m > n, `s² = rᵀ C⁻¹ r / (m − n)` (how much the pairs actually disagreed this cycle); multiply `cov` by `max(1, s² / σ²)`. It only ever grows the covariance, never shrinks it below the calibrated level.
+  - Result: 3x3 (2x2 block + z = 0 in 2D) in `TDOA3_Pose.covariance`. Flooring and the unused-axis variances are done at the ROS output (Step 6).
+  - **Calibration of `TDOA_SIGMA_M`** (once, by us): replay the stationary `.pkl` recordings and pick the σ for which the computed covariance matches the observed spread at that spot (`stationary.csv`: σx ≈ 0.07 m, σy ≈ 0.13 m, 3D solve). Then rerun in 2D mode and check it still matches. Record the value and the data it came from in a comment next to the constant.
+- **Warm start** (`SOLVER["warm_start"]`, off by default): the solver gets `initial` from the tag. Off: always the anchor centroid (z = antenna height in 2D). On: the last successful pose's position (centroid until there is one), with no age limit. Only successful solves update it.
+  - Known risk: a bad solve that still passes the gates seeds the next one and can keep it in a wrong minimum. Accepted for now since it is off by default.
+  - Later (out of scope): seed from the EKF's `/mobile_manip/odometry/filtered` instead of the last UWB pose.
 
 ## Step 5: CSV extra columns
 - Append `ref_anchor, cov_xx, cov_yy, cov_xy` to the CSV row (blank when no pose). Existing columns unchanged and first, so `csv_plotting.py` keeps working.
@@ -151,8 +160,18 @@ ROS2 = {
 ## Step 8: Integration (manual, on the robot)
 - `ros2 topic hz /mobile_manip/sensors/uwb/pose` (expect ≈ LOCALIZATION_FREQUENCY minus skipped cycles), `ros2 topic echo ...` (check stamp, frame, covariance).
 - `ros2 topic info -v` shows `ekf_filter_node` subscribed.
-- Run the EKF with the supervisor's YAML + the L-shape bags (T265 + wheel odom) + UWB live or replayed. Inspect `/mobile_manip/odometry/filtered` in RViz2 and `/diagnostics` for pose0 rejections. A high rejection rate means the covariance is too small (raise `tdoa_sigma_m`).
+- Run the EKF with the supervisor's YAML + the L-shape bags (T265 + wheel odom) + UWB live or replayed. Inspect `/mobile_manip/odometry/filtered` in RViz2 and `/diagnostics` for pose0 rejections. A high rejection rate means the covariance is too small: recalibrate `TDOA_SIGMA_M` in `solver.py`, and check for per-anchor biases (NLOS, antenna delay), which no covariance can fix.
 
 ## Step 9: Docs
 - README "ROS 2 output" section: Jazzy/Ubuntu 24.04, `source /opt/ros/jazzy/setup.bash`, venv with `--system-site-packages`, the NumPy/scipy pins from Step 0, enabling via `OUTPUTS`, topic/message/frame/covariance details, the 2D option, the Step 3 timestamp decision (solve-time stamps, the resulting error as a function of `LOCALIZATION_FREQUENCY`, and when to switch to receive-time stamps), and the assumptions (anchor frame == map, antenna at base_link).
+- README "Position uncertainty" section (under Code Implementation) explaining the covariance model in plain terms, for users who never need to touch it:
+  - What the covariance means (expected position error, m²) and that it is computed automatically every cycle, no settings.
+  - The four steps: pair geometry (Jacobian), pair noise with the shared-reference correlation (σ, ρ = ½, and why the pairs are correlated), the sandwich formula, and the bad-cycle inflation.
+  - Why it is not a fixed number: it grows near the edges of the anchor setup, with fewer pairs, and on noisy cycles, which is when the EKF most needs to trust UWB less.
+  - How `TDOA_SIGMA_M` was calibrated (which recording, observed spread) and when to recalibrate (new anchor layout or environment, frequent EKF rejections).
+  - Limitation: biases (NLOS, anchor antenna-delay errors) are not noise and are not represented in the covariance.
+- README `max_residual_rms_m` explanation (with the solver settings):
+  - What it is: the RMS disagreement between the TDOA pairs at the solved position, in meters. High values mean no single position explains all pairs (outlier pair, NLOS, wrong solution).
+  - How to set it: replay or record a run, look at the typical RMS (logged/printed), and set the threshold a few times above it (roughly 3–5× `TDOA_SIGMA_M`). Too low drops good poses; leave it `None` when publishing to the EKF only, since bad cycles already get an inflated covariance there.
+  - That enabling it requires at least 4 pairs per cycle, so fewer poses come out in sparse anchor coverage.
 - Update the README's existing CSV section (`OUTPUTS` replaces `SAVE_TO_CSV`, new columns, header-mismatch behaviour) and the "Main localization loop" TODO step 4.
