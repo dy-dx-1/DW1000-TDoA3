@@ -14,9 +14,8 @@ SPI_CS  = 0   # SPI chip select for the DW1000 connection
 ################################## ANCHOR CONFIGURATION ##################################
 # Edit anchor_dict to define or override specific anchor positions instead of the ones set in their firmware
 # All anchors you use MUST have a position defined either in their firmware OR on here. 
-    # The code will prioritise position information defined here, if it isn't present, it will use the firmware 
-    # definition that is shared by the anchors. 
-# Positions in ANCHORS are in UNITS (see UNIT CONFIGURATION). Firmware positions are always in meters.
+    # The code will prioritise position information defined here, if it isn't present, it will use the firmware definition of the anchor
+# Positions in ANCHORS are in UNITS (see UNIT CONFIGURATION). Firmware positions should match. 
 ANCHORS = {1: (4.736, 2.194, 1.213), 
            2: (1.373, 5.520, 2.190), 
            3: (1.372, 0.150, 0.128), 
@@ -27,8 +26,7 @@ ANCHORS = {1: (4.736, 2.194, 1.213),
            8: (5.045, 4.194, 1.070)} # Expected format is {anchor_id: (x, y, z)}
 
 ################################## UNIT CONFIGURATION ##################################
-# All internal computations are done in meters. UNITS only applies to the ANCHORS dict above
-# and to the output coordinates (console and CSV).
+# All internal computations are done in meters. UNITS applies to the ANCHORS dict and to the output coordinates 
 UNITS    = "m"  # Any of: "m", "cm", "mm"
 DECIMALS = 3    # Output coordinates are rounded to this number of decimals (in UNITS), 0 for whole numbers
 
