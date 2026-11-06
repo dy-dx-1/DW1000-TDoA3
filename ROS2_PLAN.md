@@ -3,11 +3,11 @@
 ## Context
 - Repo: DW1000-TDoA3. A Python TDoA3 tag on a DW1000, listening to Bitcraze LPS anchors.
   - `src/tdoa3_tag.py`: `TDOA3_Tag.run()` loops: listen for 1/LOCALIZATION_FREQUENCY s → `aggregate_raw_pkts` → `process_anchor_data` → `multilaterate` → print/CSV (inline in run()).
-    - Imports `dw1000_spi` (needs spidev) at module level, so it cannot be imported on a laptop/Windows. This is why the tests import the synthetic copy instead.
+    - Imports `dw1000_spi` (needs spidev) at module level, so it cannot be imported on a laptop/Windows. This is why the synthetic copy is used instead.
   - `src/config.py`: plain constants (has a TODO for output control).
   - `src/main.py`: entry point. Ignores TAG_ID/SPI_BUS/SPI_CS from config (hard-codes id=1).
   - `src/tdoa3_tag_synthetic.py`: near-copy of the class that replays `.pkl` recordings (`run_synthetic`). Pickles hold `[(pkt, rx), ...]` per batch, no host times.
-  - `testing/`: unittest-based tests (`test_tdoa3_tag_synthetic.py`), `stationary.csv` (older format, no `aggregated_data_size` column, ~1 Hz), `straight_line.csv` (~7.6 Hz), `csv_plotting.py` (reads `position_x/y/z` only).
+  - `stationary.csv` (older format, no `aggregated_data_size` column, ~1 Hz), `straight_line.csv` (~7.6 Hz), `csv_plotting.py` (reads `position_x/y/z` only).
 - Target: ROS 2 **Jazzy** on **Ubuntu 24.04** (system Python 3.12). The driver runs on the robot computer.
 - Consumer: the team's standard `robot_localization` `ekf_node` (`/mobile_manip/ekf_filter_node`):
   - `pose0: /mobile_manip/sensors/uwb/pose`. Fuses **x, y only**.
@@ -20,7 +20,7 @@
 
 ## Decisions
 - ROS is optional: `rclpy`/`geometry_msgs` are imported **only** inside `src/outputs/ros2_output.py`, and only if "ros2" is in `OUTPUTS`. rclpy is not in requirements.txt (it comes from apt via `source /opt/ros/jazzy/setup.bash`).
-- The solver lives in a **pure module** (`src/solver.py`, numpy/scipy only) used by both the real and synthetic tag, so it is testable anywhere and does not drift between the two copies.
+- The solver lives in a **pure module** (`src/solver.py`, numpy/scipy only) used by both the real and synthetic tag, and it does not drift between the two copies.
 - Output controllers receive a per-cycle `CycleUpdate` (counts + optional `TDOA3_Pose`), not a bare `TDOA3_Pose`, so CSV can keep logging cycles with no solution.
 - 2D solve option: z fixed at a configurable antenna height, solve x,y only.
 - TDOA noise: configurable, default σ = 0.10 m (range-difference std dev), with the shared-reference correlation modelled.
@@ -51,7 +51,6 @@ Each step is its own commit; steps 1 and 2 must not change behaviour.
     - `pose: TDOA3_Pose | None`
 - New `src/solver.py`: `multilaterate(tdoa_data, initial) -> TDOA3_Pose | None` (Step 4 adds the solver config), a straight move of today's logic (3D, huber, f_scale 0.7, ≥3 pairs). No `dw1000_spi` import.
 - `TDOA3_Tag.multilaterate` and the synthetic copy become thin wrappers calling `solver.multilaterate`. Keep `self.position` updated for now.
-- Test: move the existing solver behaviour under a unit test in `testing/test_solver.py` (synthetic geometry, known position recovered).
 
 ## ✅ Step 2: Config + output controller layer (pure refactor)
 - `src/config.py`:
@@ -144,14 +143,13 @@ ROS2 = {
   - `header.frame_id = frame_id`
   - `pose.position = (x, y, z)` in meters straight from the solver, ignoring `UNITS`/`DECIMALS` (ROS uses meters, REP 103; those settings only apply to the console and CSV outputs) (z = antenna height in 2D); `pose.orientation = (0, 0, 0, 1)` (MUST be a valid quaternion).
   - `covariance = build_covariance_array(pose, cfg)`.
-- `build_covariance_array(pose, cfg) -> list[float]` is a **pure function with no ROS imports**, kept in a ROS-free module (e.g. `src/outputs/covariance.py`) so tests can import it without rclpy. 36 floats, row-major, order x,y,z,rot_x,rot_y,rot_z:
+- `build_covariance_array(pose, cfg) -> list[float]` is a **pure function with no ROS imports**, kept in a ROS-free module (e.g. `src/outputs/covariance.py`). 36 floats, row-major, order x,y,z,rot_x,rot_y,rot_z:
   - [0] = max(cov_xx, min_var), [7] = max(cov_yy, min_var), [1] = [6] = cov_xy
   - 3D: [14] = max(cov_zz, min_var), [2]/[12] = cov_xz, [8]/[13] = cov_yz
   - 2D: [14] = unused_variance, z cross terms 0
   - [21], [28], [35] = unused_variance
   - After flooring, keep the matrix PD: clamp |cov_xy| ≤ 0.99·sqrt([0]·[7]) (and the same for xz/yz in 3D).
 - `close()`: `node.destroy_node()`, then `rclpy.shutdown()` only if `rclpy.ok()`. Both wrapped so a failure doesn't block closing the radio.
-- Tests: `build_covariance_array` indices/floors/PD (no ROS); `make_output_controllers(["console","csv"])` leaves `"rclpy" not in sys.modules`; ROS-only tests behind `unittest.skipUnless(importlib.util.find_spec("rclpy"))`.
 
 ## Step 7: Synthetic replay through the same output controllers
 - `run_synthetic(path, outputs=...)` builds `CycleUpdate`s (its `process_anchor_data` returns `(pairs, ref_anchor)` like the real tag) and uses `make_output_controllers`, so recorded `.pkl` data can be published to the EKF from a laptop (stamped with `CycleUpdate.stamp_ns`, as in Step 3). Optional `realtime=True` sleeps `RECORDING_DURATION` per batch.
