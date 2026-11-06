@@ -85,7 +85,7 @@ src/outputs/
 - `run()` prints at startup how far behind its stamp a pose can be, computed from `LOCALIZATION_FREQUENCY`.
 - Known limitation (document, don't fix): remote messages can be slightly older than the reference message, giving a small motion error per pair.
 
-## Step 4: Solver features (`src/solver.py`)
+## ✅ Step 4: Solver features (`src/solver.py`)
 - Config:
 ```python
 SOLVER = {
@@ -119,37 +119,37 @@ SOLVER = {
   - Known risk: a bad solve that still passes the gates seeds the next one and can keep it in a wrong minimum. Accepted for now since it is off by default.
   - Later (out of scope): seed from the EKF's `/mobile_manip/odometry/filtered` instead of the last UWB pose.
 
-## Step 5: CSV extra columns
+## ✅ Step 5: CSV extra columns
 - Append `ref_anchor, cov_xx, cov_yy, cov_xy` to the CSV row (blank when no pose). Existing columns unchanged and first, so `csv_plotting.py` keeps working.
   - Covariance entries are converted to UNITS² (`units.covariance_from_meters`) to match the coordinates, and written with 4 significant digits rather than rounded to DECIMALS (variances are often below it).
-- Existing files are never appended to: if `tdoa3_tag_<id>.csv` exists, the run writes to `tdoa3_tag_<id>_<n>.csv` with a random unused n in [0, 100] (timestamp suffix if all are taken) and prints a notice. The name is chosen once per run, when the output controller is created. This makes a header check unnecessary.
+- Existing files are never appended to: if `tag_<id>.csv` exists, the run writes to `tag_<id>_<n>.csv` with a random unused n in [0, 100] (timestamp suffix if all are taken) and prints a notice. The name is chosen once per run, when the output controller is created. This makes a header check unnecessary.
 
-## Step 6: `src/outputs/ros2_output.py`
-- Config:
+## ✅ Step 6: `src/outputs/ros2_output.py`
+- Config (only what depends on the robot):
 ```python
 ROS2 = {
     "node_name": "uwb_tdoa3_tag",
-    "topic": "/mobile_manip/sensors/uwb/pose",   # absolute name
+    "topic": "/mobile_manip/sensors/uwb/pose",  # absolute name
     "frame_id": "map",
-    "min_variance_m2": 0.05**2,  # floor on x/y(/z) variance
-    "unused_variance": 1e3,      # z (in 2D), roll, pitch, yaw diagonal
-    "queue_depth": 10,
-    "skip_log_every": 50,        # log skipped fixes every N
 }
 ```
-- `__init__`: if not `rclpy.ok()`, `rclpy.init(signal_handler_options=SignalHandlerOptions.NO)` so Ctrl-C stays a plain `KeyboardInterrupt` handled by the tag's try/finally. `create_node(node_name)`, `create_publisher(PoseWithCovarianceStamped, topic, queue_depth)` (default reliable QoS). Publish-only, no spin.
-- `publish(update)`: skip if `update.pose` is None or non-finite; count skips and log every `skip_log_every`.
+- Constants in `ros2_output.py` (not configurable):
+  - `MIN_VARIANCE_M2 = 0.05**2`: floor on the x/y(/z) variance, so the EKF never trusts UWB more than ~5 cm std (per-anchor biases are not in the solver's covariance).
+  - `UNUSED_VARIANCE = 1e3`: variance of the unmeasured axes (roll, pitch, yaw, and z in 2D). Ignored by the EKF, which fuses x,y only; matters for other consumers (RViz, other nodes).
+  - `QUEUE_DEPTH = 10`: publisher history depth (ROS default).
+- `"ros2"` is registered in `outputs/__init__.py`. An `ImportError` when loading it is re-raised as: "ROS 2 output selected but rclpy not importable. Did you `source /opt/ros/jazzy/setup.bash` and create the venv with --system-site-packages?"
+- `__init__`: if not `rclpy.ok()`, `rclpy.init(signal_handler_options=SignalHandlerOptions.NO)` so Ctrl-C stays a plain `KeyboardInterrupt` handled by the tag's context manager. `create_node(node_name)`, `create_publisher(PoseWithCovarianceStamped, topic, QUEUE_DEPTH)` (default reliable QoS). Publish-only, no spin.
+- `publish(update)`: cycles with `update.pose` None publish nothing (the solver already returns None for NaN/inf). One warning is printed when publishing pauses, and one info line when it resumes, with the number of cycles without a pose.
   - `header.stamp` from `update.stamp_ns`: `sec = stamp_ns // 1_000_000_000`, `nanosec = stamp_ns % 1_000_000_000` (integer math). use_sim_time is false, so system time matches the other sensors.
   - `header.frame_id = frame_id`
-  - `pose.position = (x, y, z)` in meters straight from the solver, ignoring `UNITS`/`DECIMALS` (ROS uses meters, REP 103; those settings only apply to the console and CSV outputs) (z = antenna height in 2D); `pose.orientation = (0, 0, 0, 1)` (MUST be a valid quaternion).
-  - `covariance = build_covariance_array(pose, cfg)`.
-- `build_covariance_array(pose, cfg) -> list[float]` is a **pure function with no ROS imports**, kept in a ROS-free module (e.g. `src/outputs/covariance.py`). 36 floats, row-major, order x,y,z,rot_x,rot_y,rot_z:
-  - [0] = max(cov_xx, min_var), [7] = max(cov_yy, min_var), [1] = [6] = cov_xy
-  - 3D: [14] = max(cov_zz, min_var), [2]/[12] = cov_xz, [8]/[13] = cov_yz
-  - 2D: [14] = unused_variance, z cross terms 0
-  - [21], [28], [35] = unused_variance
-  - After flooring, keep the matrix PD: clamp |cov_xy| ≤ 0.99·sqrt([0]·[7]) (and the same for xz/yz in 3D).
-- `close()`: `node.destroy_node()`, then `rclpy.shutdown()` only if `rclpy.ok()`. Both wrapped so a failure doesn't block closing the radio.
+  - `pose.position = (x, y, z)` in meters straight from the solver, ignoring `UNITS`/`DECIMALS` (ROS uses meters, REP 103) (z = antenna height in 2D); `pose.orientation = (0, 0, 0, 1)` (MUST be a valid quaternion).
+  - `covariance = build_covariance_array(pose)`.
+- `build_covariance_array(pose) -> list[float]` is a plain function in `ros2_output.py`. 36 floats, row-major, order x,y,z,rot_x,rot_y,rot_z:
+  - Solved block (x,y in 2D, x,y,z in 3D): the solver's covariance, diagonal floored at `MIN_VARIANCE_M2`.
+  - Other diagonal entries: `UNUSED_VARIANCE`, no cross terms.
+  - No positive-definite correction needed: raising the diagonal of a positive-definite matrix keeps it positive definite.
+- `close()`: `node.destroy_node()`, then `rclpy.shutdown()` (in a `finally`) only if this controller initialised rclpy and it is still ok.
+- Checked on Windows against stand-in rclpy/geometry_msgs modules (stamp, frame, position, quaternion, covariance layout, pause/resume prints, shutdown). Not yet run against a real ROS 2 install (Step 0 / Step 8).
 
 ## Step 7: Synthetic replay through the same output controllers
 - `run_synthetic(path, outputs=...)` builds `CycleUpdate`s (its `process_anchor_data` returns `(pairs, ref_anchor)` like the real tag) and uses `make_output_controllers`, so recorded `.pkl` data can be published to the EKF from a laptop (stamped with `CycleUpdate.stamp_ns`, as in Step 3). Optional `realtime=True` sleeps `RECORDING_DURATION` per batch.

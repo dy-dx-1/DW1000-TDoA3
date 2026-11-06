@@ -41,5 +41,13 @@ SOLVER = {
 
 ################################## OUTPUT CONTROL ##################################
 LOCALIZATION_FREQUENCY = 1  # Frequency of updates in Hz
-OUTPUTS = ["console", "dynamic"]  # Output controllers to enable, any of: "console", "csv", "dynamic"
+OUTPUTS = ["console", "dynamic"]  # Output controllers to enable, any of: "console", "csv", "dynamic", "ros2"
 CSV_SAVE_INTERVAL_SECONDS = 3600  # Flush buffered localization rows at most hourly
+
+################################## ROS 2 OUTPUT ##################################
+# Only used when "ros2" is in OUTPUTS. Needs a ROS 2 install (see README)
+ROS2 = {
+    "node_name": "uwb_tdoa3_tag",
+    "topic": "/mobile_manip/sensors/uwb/pose",  # Absolute topic name of the published geometry_msgs/PoseWithCovarianceStamped
+    "frame_id": "map",                          # Frame of the anchor coordinates
+}
