@@ -122,7 +122,8 @@ SOLVER = {
 
 ## Step 5: CSV extra columns
 - Append `ref_anchor, cov_xx, cov_yy, cov_xy` to the CSV row (blank when no pose). Existing columns unchanged and first, so `csv_plotting.py` keeps working.
-- Header check before appending: if the existing file's header differs from the current one, don't append. Start `tdoa3_tag_<id>_<YYYYmmdd-HHMMSS>.csv` and print a notice.
+  - Covariance entries are converted to UNITS² (`units.covariance_from_meters`) to match the coordinates, and written with 4 significant digits rather than rounded to DECIMALS (variances are often below it).
+- Existing files are never appended to: if `tdoa3_tag_<id>.csv` exists, the run writes to `tdoa3_tag_<id>_<n>.csv` with a random unused n in [0, 100] (timestamp suffix if all are taken) and prints a notice. The name is chosen once per run, when the output controller is created. This makes a header check unnecessary.
 
 ## Step 6: `src/outputs/ros2_output.py`
 - Config:

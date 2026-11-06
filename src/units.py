@@ -21,3 +21,8 @@ def position_from_meters(position:tuple)->tuple[float, float, float]:
     if DECIMALS == 0:
         return tuple(round(c / _SCALE) for c in position)
     return tuple(round(c / _SCALE, DECIMALS) for c in position)
+
+
+def covariance_from_meters(value:float)->float:
+    """Converts a covariance entry from m² to UNITS² (not rounded, variances are often below DECIMALS)."""
+    return value / _SCALE**2
