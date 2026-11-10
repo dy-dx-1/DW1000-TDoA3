@@ -38,6 +38,16 @@ Each step is its own commit; steps 1 and 2 must not change behaviour.
 - Verify SPI access without root (user in the `spidev` group).
 - Publish a fake constant pose and confirm the EKF is subscribed: `ros2 topic info -v /mobile_manip/sensors/uwb/pose`.
 
+### Results (2026-11-10, Jetson, Ubuntu 24.04, Python 3.12)
+- ✅ Jazzy installed from apt (`ros-jazzy-ros-base`, `ros-dev-tools`, `ros-jazzy-robot-localization`, `python3-venv`, `python3-dev`).
+- ✅ Venv with `--system-site-packages` + `pip install -r requirements.txt` works. The venv's numpy 2.5.4 / scipy 1.18.1 shadow Ubuntu's numpy 1.26.4 / scipy 1.11.4.
+- ✅ **No NumPy clash**: importing rclpy and assigning the 36-float covariance works with numpy 2.5.4, so `requirements.txt` is used as-is and no `requirements-ros.txt` is needed.
+- ✅ `rclpy.init(signal_handler_options=SignalHandlerOptions.NO)` accepted; Ctrl-C raises a plain `KeyboardInterrupt`.
+- ✅ SPI devices present without extra setup: `/dev/spidev0.0`, `0.1`, `1.0`, `1.1`.
+- ⏳ SPI access without root not yet confirmed (`ls -l /dev/spidev0.0` group + a run without sudo).
+- ⏳ Publishing from the venv's Python not yet tested (serialisation path).
+- ⏳ EKF subscription check pending: the EKF machine was not accessible.
+
 ## ✅ Step 1: Result types + solver extraction (no behaviour change)
 - New `src/pose.py`:
   - `TDOA3_Pose` dataclass:
