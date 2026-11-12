@@ -1,0 +1,23 @@
+# Minimal robot_localization EKF for testing the ROS 2 output: fuses the UWB x,y only.
+# With no other input, the filter behaves as a constant-velocity model.
+#   ros2 run robot_localization ekf_node --ros-args --params-file testing/ekf_uwb_test.yaml
+# Output: /odometry/filtered (nav_msgs/Odometry)
+/**:
+  ros__parameters:
+    frequency: 30.0
+    two_d_mode: true
+    publish_tf: false
+    world_frame: map
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_link
+
+    pose0: /mobile_manip/sensors/uwb/pose   # ROS2["topic"] in src/config.py
+    pose0_config: [true,  true,  false,   # x, y, z
+                   false, false, false,   # roll, pitch, yaw
+                   false, false, false,   # vx, vy, vz
+                   false, false, false,   # vroll, vpitch, vyaw
+                   false, false, false]   # ax, ay, az
+    pose0_differential: false
+    pose0_relative: false
+    pose0_rejection_threshold: 4.0        # Mahalanobis gate, same value as the team's EKF
