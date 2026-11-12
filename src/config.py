@@ -16,7 +16,20 @@ SPI_CS  = 0   # SPI chip select for the DW1000 connection
 # All anchors you use MUST have a position defined either in their firmware OR on here. 
     # The code will prioritise position information defined here, if it isn't present, it will use the firmware definition of the anchor
 # Positions in ANCHORS are in UNITS (see UNIT CONFIGURATION). Firmware positions should match. 
-ANCHORS = {1: (4.736, 2.194, 1.213), 
+ANCHORS = {
+    0: (-1.4700000286102295, -2.4000000953674316, 2.7100000381469727),
+    1: (-1.5399999618530273, 1.659999966621399, 1.7200000286102295),
+    2: (2.640000104904175, 9.979999542236328, 1.0499999523162842),
+    3: (7.900000095367432, 5.0, 2.0),
+    4: (7.96999979019165, 1.090000033378601, 2.240000009536743),
+    5: (8.020000457763672, -2.7300000190734863, 2.0799999237060547),
+    6: (2.309999942779541, -3.869999885559082, 2.25),
+    7: (4.690000057220459, 5.610000133514404, 2.1500000953674316),
+    8: (-1.5499999523162842, 6.840000152587891, 2.700000047683716),
+    9: (-1.5700000524520874, 9.25, 2.8499999046325684),
+}
+"""
+MIST = {1: (4.736, 2.194, 1.213), 
            2: (1.373, 5.520, 2.190), 
            3: (1.372, 0.150, 0.128), 
            4: (4.736, 2.194, 0.302), 
@@ -24,7 +37,7 @@ ANCHORS = {1: (4.736, 2.194, 1.213),
            6: (4.582, 6.040, 1.460), 
            7: (0.223, 0.458, 2.190), 
            8: (5.045, 4.194, 1.070)} # Expected format is {anchor_id: (x, y, z)}
-
+"""
 ################################## UNIT CONFIGURATION ##################################
 # All internal computations are done in meters. UNITS applies to the ANCHORS dict and to the output coordinates 
 UNITS    = "m"  # Any of: "m", "cm", "mm"
