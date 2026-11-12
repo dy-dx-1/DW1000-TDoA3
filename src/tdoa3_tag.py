@@ -111,8 +111,7 @@ class TDOA3_Tag:
             self.initial = initial_pos # TEMP TODO NOTE testing - safe anchoring of solver  
             #self.position = (initial_pos[0], initial_pos[1], initial_pos[2])
         else: 
-            pass 
-            #self.position = (0,0,0) # If we don't have any info, try (0,0,0). NOTE todo in future: evaluate how this actually performs. If needed, shift this to on first listen when can use firmware positions of anchors to help.     
+            self.initial = (0,0,0) # If we don't have any info, try (0,0,0). NOTE todo in future: evaluate how this actually performs. If needed, shift this to on first listen when can use firmware positions of anchors to help.     
     
     def __enter__(self):
         return self 
