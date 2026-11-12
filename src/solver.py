@@ -11,7 +11,7 @@ MIN_PAIRS_RMS_GATE = 4  # Minimum TDOA pairs when the max_residual_rms_m gate is
 HUBER_F_SCALE_M = 0.7   # Residual size [m] above which huber starts capping a pair's influence. To be tuned more in the future
 
 # Noise model used for the covariance. Not user-configurable: the user gets a covariance without having to model uncertainty.
-TDOA_SIGMA_M = 0.10      # PLACEHOLDER until calibrated. Std dev of one TDOA pair's range difference [m]
+TDOA_SIGMA_M = 0.06      # Calibrated at ETS on 12nov 2026. Std dev of one TDOA pair's range difference [m]
 PAIR_CORRELATION = 0.5   # Every pair reuses the reference anchor's packet, so any two pairs share half their noise
                          # when the tag's rx timestamp noise dominates
 
