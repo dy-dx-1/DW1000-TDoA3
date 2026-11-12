@@ -10,7 +10,7 @@ class ConsoleOutputController(OutputController):
         self.tag_id = tag_id
 
     def publish(self, update: CycleUpdate) -> None:
-        print(f"known anchors={update.n_known_anchors} | aggregated:{update.n_aggregated} | {update.n_pairs}")
+        print(f"known anchors:{update.n_known_anchors} | aggregated:{update.n_aggregated} | processed:{update.n_pairs}")
         if update.pose is None:
             print("[INFO] -----> New position estimated: None")
         else:
