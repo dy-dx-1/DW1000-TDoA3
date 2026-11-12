@@ -16,7 +16,18 @@ SPI_CS  = 0   # SPI chip select for the DW1000 connection
 # All anchors you use MUST have a position defined either in their firmware OR on here. 
     # The code will prioritise position information defined here, if it isn't present, it will use the firmware definition of the anchor
 # Positions in ANCHORS are in UNITS (see UNIT CONFIGURATION). Firmware positions should match. 
-ANCHORS = {
+ANCHORS = {} 
+"""
+MIST = {1: (4.736, 2.194, 1.213), 
+           2: (1.373, 5.520, 2.190), 
+           3: (1.372, 0.150, 0.128), 
+           4: (4.736, 2.194, 0.302), 
+           5: (0.793, 2.971, 2.190), 
+           6: (4.582, 6.040, 1.460), 
+           7: (0.223, 0.458, 2.190), 
+           8: (5.045, 4.194, 1.070)} # Expected format is {anchor_id: (x, y, z)}
+
+ETS = {
     0: (-1.4700000286102295, -2.4000000953674316, 2.7100000381469727),
     1: (-1.5399999618530273, 1.659999966621399, 1.7200000286102295),
     2: (2.640000104904175, 9.979999542236328, 1.0499999523162842),
@@ -29,15 +40,6 @@ ANCHORS = {
     9: (-1.5700000524520874, 9.25, 2.8499999046325684),
 }
 """
-MIST = {1: (4.736, 2.194, 1.213), 
-           2: (1.373, 5.520, 2.190), 
-           3: (1.372, 0.150, 0.128), 
-           4: (4.736, 2.194, 0.302), 
-           5: (0.793, 2.971, 2.190), 
-           6: (4.582, 6.040, 1.460), 
-           7: (0.223, 0.458, 2.190), 
-           8: (5.045, 4.194, 1.070)} # Expected format is {anchor_id: (x, y, z)}
-"""
 ################################## UNIT CONFIGURATION ##################################
 # All internal computations are done in meters. UNITS applies to the ANCHORS dict and to the output coordinates 
 UNITS    = "m"  # Any of: "m", "cm", "mm"
@@ -45,8 +47,8 @@ DECIMALS = 3    # Output coordinates are rounded to this number of decimals (in 
 
 ################################## SOLVER CONFIGURATION ##################################
 SOLVER = {
-    "mode_2d": False,            # Solve x,y only, with z fixed at antenna_height_m. More stable when the tag's height is known
-    "antenna_height_m": 0.0,     # Height of the tag's antenna, in meters (regardless of UNITS). Only used when mode_2d is True
+    "mode_2d": True,            # Solve x,y only, with z fixed at antenna_height_m. More stable when the tag's height is known
+    "antenna_height_m": 0.25,     # Height of the tag's antenna, in meters (regardless of UNITS). Only used when mode_2d is True
     "warm_start": False,         # Start each solve from the last pose instead of the anchor centroid
     "max_residual_rms_m": None,  # Reject poses whose TDOA pairs disagree by more than this RMS, in meters. None = disabled
                                  # When enabled, at least 4 TDOA pairs are needed per pose (see README)
