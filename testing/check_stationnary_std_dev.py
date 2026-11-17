@@ -10,7 +10,6 @@ if str(SRC_DIR) not in sys.path:
 
 from config import TAG_ID, SPI_BUS, SPI_CS, ANCHORS
 from tdoa3_tag import TDOA3_Tag
-from units import anchors_to_meters
 
 
 def main():
@@ -25,7 +24,7 @@ def main():
 
     try:
         with PositionTrackingTag(id=TAG_ID, bus=SPI_BUS, cs=SPI_CS,
-                                 anchors=anchors_to_meters(ANCHORS)) as tag:
+                                 anchors=ANCHORS) as tag:
             tag.run()
     except KeyboardInterrupt:
         if not positions:

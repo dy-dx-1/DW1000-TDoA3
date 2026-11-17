@@ -9,7 +9,6 @@ from config import (
     SOLVER,
 )
 from pose import TDOA3_Pose, CycleUpdate
-from units import anchors_to_meters
 from outputs import make_output_controllers
 import solver
 from solver import SPEED_OF_LIGHT
@@ -85,7 +84,7 @@ class TDOA3_Tag:
     - id: The tag's ID 
     - bus: SPI bus for the DW1000 connection
     - cs:  SPI chip select for the DW1000 connection
-    - anchors: {anchor_id: (x,y,z)} anchor positions in meters. Defaults to config.py ANCHORS converted from UNITS.
+    - anchors: {anchor_id: (x,y,z)} anchor positions in meters. Defaults to config.py ANCHORS.
     - outputs: Names of the output controllers that receive each cycle's result (see OUTPUTS in config.py)
     """
     def __init__(self, id, bus=0, cs=0, anchors=None, outputs=OUTPUTS): 
@@ -100,7 +99,7 @@ class TDOA3_Tag:
 
         # Anchor positions can be pre-defined in config.py to overwrite firmware values. 
         # If a position is not pre-defined, it will be populated with the firmware-defined values published by the anchor in it's messages.
-        self.anchors = dict(anchors) if anchors is not None else anchors_to_meters(ANCHORS) # Format {anchor_id: (x,y,z)} in meters
+        self.anchors = dict(anchors) if anchors is not None else dict(ANCHORS) # Format {anchor_id: (x,y,z)} in meters
         self.TOF_ref_anchors = {}    # Holds theoretical TOF between anchors. Used for outlier detection. {anchor_id: {other_anchor_id:TOF}}
         self.update_ref_TOFs()       # Computing TOF for all config.py anchors 
         self.position = None         # Last solved (x,y,z), used as the warm start

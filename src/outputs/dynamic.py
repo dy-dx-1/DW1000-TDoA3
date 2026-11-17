@@ -7,6 +7,7 @@ import struct
 
 from outputs.base import OutputController
 from pose import CycleUpdate
+from units import position_in_units
 
 UDP_HOST = "127.0.0.1"
 UDP_PORT = 5005
@@ -14,7 +15,8 @@ UDP_PORT = 5005
 
 class DynamicDisplayController(OutputController):
     """
-    Sends the latest position update to a UDP socket for use with utils/dynamic_MIST.py.
+    Sends the latest position update in configured UNITS to a UDP socket for use with utils/dynamic_MIST.py.
+    Coordinates are not rounded to DECIMALS.
     """
     def __init__(self, tag_id):
         self.tag_id = tag_id
@@ -25,7 +27,7 @@ class DynamicDisplayController(OutputController):
         if update.pose is None:
             return
 
-        packet = struct.pack("<ifff", self.tag_id, *update.pose.position)
+        packet = struct.pack("<ifff", self.tag_id, *position_in_units(update.pose.position))
         self._socket.sendto(packet, self.destination)
 
     def close(self) -> None:
