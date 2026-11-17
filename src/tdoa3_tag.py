@@ -129,7 +129,7 @@ class TDOA3_Tag:
     def _open_radio(self, bus, cs):
         """Opens the DW1000. Imported here so the module (and its computations) can be used without spidev."""
         from dw1000_spi import DW1000
-        return DW1000(bus, cs, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
+        return DW1000(bus, cs, 1_000_000, 10_000_000, channel=2, PRF=64, bitrate=6, preamble_length=128, preamble_code=9, smart_tx_power=True, tx_power_settings=None)
 
     def update_ref_TOFs(self): 
         """
